@@ -10,25 +10,26 @@
 <body>
     <div class="nav-holder">
         <span class="logo">JUNE</span>
-
-    <button class="setting-wheel" aria-label="Settings">
-        <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-    </button>
+        <button class="setting-wheel" aria-label="Settings">
+            <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+        </button>
     </div>
 
     <main class="card">
         <section class="chat">
-            <div class="chat-head">
-                <span class="meta">thought for 19ms</span>
+            <div class="chat-log" id="chatLog"></div>
+            <div class="chat-status" id="chatStatus">
+                <div class="spinner" id="spinner"></div>
+                <span class="status-text" id="statusText"></span>
             </div>
-            <p class="message">Hey there! I am June. What is your name?</p>
+            <div class="interim" id="interim"></div>
             <div class="type-bar">
                 <button class="text-toggle" id="textToggle" type="button" aria-label="Toggle text input" aria-expanded="false">T &gt;</button>
-                <input class="type-input" type="text" placeholder="Type a message..." aria-label="Message">
-                <button class="send-btn" type="button" aria-label="Send">
+                <input class="type-input" id="typeInput" type="text" placeholder="Type a message..." aria-label="Message">
+                <button class="send-btn" id="sendBtn" type="button" aria-label="Send">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M12 19V5"></path>
                         <path d="M5 12l7-7 7 7"></path>
@@ -44,8 +45,27 @@
         </section>
     </main>
 
-    <p class="hints">always on · say pause to stop · resume to wake · orb or <kbd>m</kbd></p>
+    <p class="hints">always on · hang on / shush to pause · orb or <kbd>m</kbd> to resume · say go to sleep to end</p>
+
+    <div class="settings-overlay" id="settingsOverlay">
+        <div class="settings-modal">
+            <div class="settings-header">
+                <span class="settings-title">Settings</span>
+                <button class="settings-close" id="settingsClose" aria-label="Close">&times;</button>
+            </div>
+            <div class="settings-body">
+                <label class="settings-label">
+                    <span>Voice Provider</span>
+                    <select class="settings-select" id="ttsProviderSelect">
+                        <option value="browser">Browser</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+    </div>
+
     <script src="js/index.js"></script>
-    <script src="js/ui.js"></script>
+    <script src="js/memory.js"></script>
+    <script src="js/voice-client.js"></script>
 </body>
 </html>

@@ -1,0 +1,19 @@
+{
+  "name": "june-voice-agent",
+  "version": "1.0.0",
+  "description": "Ultra-low-latency full-duplex voice agent backend: Deepgram Flux STT + OpenAI Responses LLM + Cartesia Sonic TTS with barge-in and speculative execution.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "openai": "^4.67.0",
+    "ws": "^8.18.0"
+  }
+}
