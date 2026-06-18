@@ -221,6 +221,21 @@ Separate “turn intelligence” LLM calls (`MEMORY_AI_MODEL`, default `gpt-4.1`
 
 Background associative mind (`THOUGHT_AI_MODEL`, default `gpt-4.1-mini`). Runs debounced on partial transcripts (`THOUGHT_DEBOUNCE_MS`, rate-limited `THOUGHT_RATE_LIMIT_MS`). Produces `asyncThoughtCache` (topic, casualDrops, memoryBridge, juneSelfDrop) merged into the main LLM prompt when confidence ≥ 0.35.
 
+### `lib/snapshot-agent.js`
+
+Background topic context generator (`SNAPSHOT_AI_MODEL`, default `gpt-4.1`). Generates ~100-150 word conversational snapshots about topics being discussed (shows, sports, people, memories, etc.).
+
+**Key design: async & non-blocking**
+- Main AI **never waits** for snapshot — uses whatever's cached
+- Smart topic detection: only refreshes when topic changes
+- Rate-limited (`SNAPSHOT_RATE_LIMIT_MS`, default 5s) and debounced (`SNAPSHOT_DEBOUNCE_MS`, default 800ms)
+- Cache expires after `SNAPSHOT_MAX_AGE_MS` (default 2 min)
+
+Output includes:
+- `topic` / `topicType` — what's being discussed
+- `snapshot` — conversational context (~150 words)
+- `conversationAngles` — natural follow-up hooks
+
 ### `lib/functions.js`
 
 - `Fn.PAUSE`, `Fn.RESUME`, `Fn.SLEEP`
@@ -296,7 +311,7 @@ Raw Int16 PCM chunks @ 16kHz (mic audio).
 
 ## AI agent split
 
-June uses **four distinct LLM roles** (same or different models via env):
+June uses **five distinct LLM roles** (same or different models via env):
 
 ```mermaid
 flowchart LR
@@ -305,9 +320,10 @@ flowchart LR
     Intent[Intent AI<br/>memory-ai analyzeUserIntent]
   end
 
-  subgraph Async["After / between turns"]
+  subgraph Async["After / between turns (non-blocking)"]
     TurnMem[Turn Memory AI<br/>memory-ai analyzeTurnMemory]
     Thought[Thought Agent<br/>thought-agent.js]
+    Snapshot[Snapshot Agent<br/>snapshot-agent.js]
   end
 
   subgraph Session["Session lifecycle"]
@@ -315,10 +331,11 @@ flowchart LR
     Dedupe[Dedup AI<br/>memory-ai deduplicateMemories]
   end
 
-  Main -->|"personality + memory + thoughts"| User
+  Main -->|"personality + memory + thoughts + snapshot"| User
   Intent -->|"pause/resume"| Session
   TurnMem -->|"updates"| Memory
   Thought -->|"hints"| Main
+  Snapshot -->|"topic context"| Main
 ```
 
 | Agent | File | Prompt source | Runs |
@@ -327,6 +344,7 @@ flowchart LR
 | Intent detection | `lib/memory-ai.js` | `INTENT_AI_PROMPT` | Start of each turn |
 | Turn memory | `lib/memory-ai.js` | `MEMORY_AI_PROMPT` | After each assistant reply |
 | Thought | `lib/thought-agent.js` | `THOUGHT_AGENT_PROMPT` | Debounced on partial STT |
+| **Snapshot** | `lib/snapshot-agent.js` | `SNAPSHOT_PROMPT` | Async on topic change (rate-limited) |
 | Consolidation | `lib/memory-ai.js` | `CONSOLIDATION_PROMPT` | WebSocket close, sleep, `/api/consolidate` |
 
 ---
@@ -360,6 +378,10 @@ flowchart LR
 | `EOT_TIMEOUT_MS` | `3000` | Flux silence timeout |
 | `THOUGHT_DEBOUNCE_MS` | `500` | Delay before thought agent runs |
 | `THOUGHT_RATE_LIMIT_MS` | `2000` | Min interval between thought runs |
+| `SNAPSHOT_AI_MODEL` | `gpt-4.1` | Snapshot context model |
+| `SNAPSHOT_DEBOUNCE_MS` | `800` | Delay before snapshot agent runs |
+| `SNAPSHOT_RATE_LIMIT_MS` | `5000` | Min interval between snapshot runs |
+| `SNAPSHOT_MAX_AGE_MS` | `120000` | How long snapshot stays valid |
 
 ---
 
@@ -382,6 +404,7 @@ flowchart LR
 | What June remembers per turn | `lib/memory-ai.js`, `lib/memory.js` (`applyMemoryUpdates`) |
 | Memory retrieval / prompt injection | `lib/memory.js` (`retrieveRelevantMemories`, `buildMemoryInstructions`) |
 | Background “pop-up thoughts” | `lib/thought-agent.js`, `lib/llm.js` (`buildThoughtHints`) |
+| Topic context snapshots | `lib/snapshot-agent.js`, `lib/llm.js` (`buildSnapshotContext`) |
 | TTS voice / provider | `.env`, `lib/tts.js`, settings UI in `june.html` |
 | UI / orb / chat display | `june.html`, `css/index.css`, `js/voice-client.js` |
 | Client memory persistence | `js/memory.js` |

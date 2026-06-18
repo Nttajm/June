@@ -19,6 +19,7 @@
   const settingsOverlay = document.getElementById('settingsOverlay');
   const settingsClose = document.getElementById('settingsClose');
   const ttsProviderSelect = document.getElementById('ttsProviderSelect');
+  const muteBtn = document.getElementById('muteBtn');
 
   const mem = window.JuneMemory;
   let currentMemory = mem.load();
@@ -28,6 +29,7 @@
   let ws = null;
   let running = false;
   let paused = false;
+  let micMuted = false;
 
   let micStream = null;
   let inCtx = null;
@@ -47,6 +49,13 @@
   let wordIndex = 0;
   let lastUserMsgText = '';
   let lastUserMsgAt = 0;
+
+  let analyserNode = null;
+  let analyserData = null;
+  let userRms = 0;
+  let smoothedRms = 0;
+  let orbRaf = null;
+  let orbState = 'idle'; // 'idle' | 'listening' | 'speaking' | 'thinking'
 
   function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -89,6 +98,15 @@
     source.connect(workletNode);
 
     outCtx = new AudioContext({ sampleRate: TTS_RATE });
+    // Browsers (especially Chrome) may auto-suspend an AudioContext even when
+    // created inside a user-gesture handler.  Resume immediately so the first
+    // audio chunk isn't silently dropped.
+    outCtx.resume().catch(() => {});
+    analyserNode = outCtx.createAnalyser();
+    analyserNode.fftSize = 256;
+    analyserNode.smoothingTimeConstant = 0.6;
+    analyserData = new Uint8Array(analyserNode.frequencyBinCount);
+    analyserNode.connect(outCtx.destination);
     nextTime = 0;
 
     if (!on) {
@@ -101,6 +119,9 @@
     if (!running) return;
     running = false;
     paused = false;
+    micMuted = false;
+    if (muteBtn) { muteBtn.classList.remove('is-muted'); muteBtn.setAttribute('aria-label', 'Mute microphone'); }
+    stopOrbLoop();
     flushPlayback();
     if (workletNode) {
       workletNode.port.onmessage = null;
@@ -112,6 +133,10 @@
     if (ws && ws.readyState === WebSocket.OPEN) ws.close();
     ws = null;
     micStream = inCtx = outCtx = workletNode = null;
+    analyserNode = null;
+    analyserData = null;
+    userRms = 0;
+    smoothedRms = 0;
     resampleBuffer = [];
     setOrbActive(false);
     hideStatus();
@@ -119,7 +144,11 @@
   }
 
   function onMicFrame(float32, inRate) {
-    if (!running || paused || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!running || paused || micMuted || !ws || ws.readyState !== WebSocket.OPEN) return;
+    // Track amplitude for orb
+    let sq = 0;
+    for (let i = 0; i < float32.length; i++) sq += float32[i] * float32[i];
+    userRms = Math.sqrt(sq / float32.length);
     for (let i = 0; i < float32.length; i++) resampleBuffer.push(float32[i]);
     const ratio = inRate / STT_RATE;
     const needed = Math.floor(resampleBuffer.length / ratio);
@@ -167,10 +196,10 @@
         }
         break;
       case 'assistant_delta':
-        appendAssistantDelta(msg.textWithStalls || msg.text, msg.continuation, msg.turnId);
+        appendAssistantDelta(msg.text, msg.continuation, msg.turnId);
         break;
       case 'assistant_done':
-        finalizeAssistant(msg.textWithStalls || msg.text, msg.continuation, msg.turnId, msg.speakFallback);
+        finalizeAssistant(msg.text, msg.continuation, msg.turnId, msg.speakFallback);
         break;
       case 'memory_update':
         currentMemory = mem.applyFromServer(msg.memory);
@@ -249,7 +278,13 @@
     if (state === 'THINKING') {
       thinkingStart = performance.now();
       showStatus('thinking');
-      if (paused) setOrbActive(false);
+      if (paused) {
+        stopOrbLoop();
+        setOrbActive(false);
+      } else {
+        orbState = 'thinking';
+        startOrbLoop();
+      }
     } else if (state === 'SPEAKING') {
       const elapsed = thinkingStart ? Math.round(performance.now() - thinkingStart) : 0;
       thinkingStart = null;
@@ -259,19 +294,28 @@
       }
       if (paused) {
         hideStatus();
+        stopOrbLoop();
         setOrbActive(false);
       } else {
         showStatus('speaking');
+        smoothedRms = 0;
+        orbState = 'speaking';
+        startOrbLoop();
       }
     } else if (state === 'LISTENING') {
       thinkingStart = null;
       if (paused) {
         hideStatus();
+        stopOrbLoop();
         setOrbActive(false);
       } else {
         showStatus('listening');
+        smoothedRms = 0;
+        orbState = 'listening';
+        startOrbLoop();
       }
     } else {
+      stopOrbLoop();
       hideStatus();
     }
   }
@@ -353,22 +397,16 @@
 
   function renderAnimatedWords(container, text) {
     container.innerHTML = '';
-    const spacedText = text.replace(/(\{-gap:[\d.]+\-\})/g, ' $1 ');
-    const words = spacedText.split(/(\s+)/);
+    const words = text.split(/(\s+)/);
     let delay = 0;
     words.forEach((word) => {
       if (!word) return;
       const span = document.createElement('span');
-      if (word.startsWith('{-gap:')) {
-        span.className = 'stall-marker';
-        span.textContent = word;
-      } else {
-        span.className = 'word';
-        span.textContent = word;
-        span.style.animationDelay = `${delay}ms`;
-      }
+      span.className = 'word';
+      span.textContent = word;
+      span.style.animationDelay = `${delay}ms`;
       container.appendChild(span);
-      if (word.trim() && !word.startsWith('{-gap:')) delay += 35;
+      if (word.trim()) delay += 35;
     });
   }
 
@@ -381,7 +419,6 @@
   }
 
   function appendAssistantDelta(text, continuation = false, turnId = null) {
-    const spacedText = text.replace(/(\{-gap:[\d.]+\-\})/g, ' $1 ');
     if (continuation && lastAssistantMsg) {
       currentAssistantMsg = lastAssistantMsg;
       const textEl = currentAssistantMsg.querySelector('.msg-text');
@@ -391,20 +428,15 @@
       const br2 = document.createElement('br');
       textEl.appendChild(br2);
 
-      const words = spacedText.split(/(\s+)/);
+      const words = text.split(/(\s+)/);
       words.forEach((word) => {
         if (!word) return;
         const span = document.createElement('span');
-        if (word.startsWith('{-gap:')) {
-          span.className = 'stall-marker';
-          span.textContent = word;
-        } else {
-          span.className = 'word word--trail';
-          span.textContent = word;
-          span.style.animationDelay = `${wordIndex * 35}ms`;
-        }
+        span.className = 'word word--trail';
+        span.textContent = word;
+        span.style.animationDelay = `${wordIndex * 35}ms`;
         textEl.appendChild(span);
-        if (word.trim() && !word.startsWith('{-gap:')) wordIndex++;
+        if (word.trim()) wordIndex++;
       });
       chatLog.scrollTop = chatLog.scrollHeight;
       return;
@@ -416,20 +448,15 @@
       startAssistantMessage(turnId);
     }
     const textEl = currentAssistantMsg.querySelector('.msg-text');
-    const words = spacedText.split(/(\s+)/);
+    const words = text.split(/(\s+)/);
     words.forEach((word) => {
       if (!word) return;
       const span = document.createElement('span');
-      if (word.startsWith('{-gap:')) {
-        span.className = 'stall-marker';
-        span.textContent = word;
-      } else {
-        span.className = 'word';
-        span.textContent = word;
-        span.style.animationDelay = `${wordIndex * 35}ms`;
-      }
+      span.className = 'word';
+      span.textContent = word;
+      span.style.animationDelay = `${wordIndex * 35}ms`;
       textEl.appendChild(span);
-      if (word.trim() && !word.startsWith('{-gap:')) wordIndex++;
+      if (word.trim()) wordIndex++;
     });
     chatLog.scrollTop = chatLog.scrollHeight;
   }
@@ -458,7 +485,7 @@
 
       for (let i = clientHistory.length - 1; i >= 0; i--) {
         if (clientHistory[i].role === 'assistant' && clientHistory[i].content === '') {
-          clientHistory[i].content = fullText.replace(/\{-gap:[\d.]+\-\}/g, '');
+          clientHistory[i].content = fullText;
           break;
         }
       }
@@ -468,7 +495,7 @@
     wordIndex = 0;
 
     if (speakFallback && fullText && currentTtsProvider === 'browser') {
-      speakWithBrowserTts(fullText.replace(/\{-gap:[\d.]+\-\}/g, ''));
+      speakWithBrowserTts(fullText);
     }
 
     if (paused) {
@@ -503,6 +530,11 @@
     const pcm = new Float32Array(buffer, 4);
     if (pcm.length === 0) return;
 
+    // Re-resume the context if the browser suspended it (autoplay policy, tab
+    // losing focus, etc.).  This is safe to call repeatedly — it's a no-op when
+    // the context is already running.
+    if (outCtx.state === 'suspended') outCtx.resume().catch(() => {});
+
     if (turnId !== playTurn) {
       playTurn = turnId;
       nextTime = 0;
@@ -512,7 +544,7 @@
     audioBuffer.copyToChannel(pcm, 0);
     const src = outCtx.createBufferSource();
     src.buffer = audioBuffer;
-    src.connect(outCtx.destination);
+    src.connect(analyserNode);
 
     const now = outCtx.currentTime;
     if (nextTime < now) nextTime = now + 0.02;
@@ -531,6 +563,49 @@
     nextTime = 0;
   }
 
+  function startOrbLoop() {
+    if (orbRaf) return;
+    function tick() {
+      orbRaf = requestAnimationFrame(tick);
+      updateOrbScale();
+    }
+    orbRaf = requestAnimationFrame(tick);
+  }
+
+  function stopOrbLoop() {
+    if (orbRaf) { cancelAnimationFrame(orbRaf); orbRaf = null; }
+    orbState = 'idle';
+    smoothedRms = 0;
+    userRms = 0;
+    if (orb) orb.style.transform = 'scale(1)';
+  }
+
+  function updateOrbScale() {
+    if (!orb) return;
+    if (orbState === 'speaking' && analyserNode && analyserData) {
+      analyserNode.getByteTimeDomainData(analyserData);
+      let sq = 0;
+      for (let i = 0; i < analyserData.length; i++) {
+        const v = (analyserData[i] - 128) / 128;
+        sq += v * v;
+      }
+      const rms = Math.sqrt(sq / analyserData.length);
+      smoothedRms += (rms - smoothedRms) * 0.3;
+      const scale = 1 + Math.min(smoothedRms * 4.0, 0.45);
+      orb.style.transform = `scale(${scale.toFixed(4)})`;
+    } else if (orbState === 'listening') {
+      smoothedRms += (userRms - smoothedRms) * 0.22;
+      const scale = 1 + Math.min(smoothedRms * 3.5, 0.40);
+      orb.style.transform = `scale(${scale.toFixed(4)})`;
+    } else if (orbState === 'thinking') {
+      const t = performance.now() / 1000;
+      const scale = 1 + Math.sin(t * 1.8) * 0.055;
+      orb.style.transform = `scale(${scale.toFixed(4)})`;
+    } else {
+      orb.style.transform = 'scale(1)';
+    }
+  }
+
   function setOrbActive(active) {
     if (pauseStatus) {
       pauseStatus.style.opacity = active ? '0' : '1';
@@ -541,7 +616,7 @@
       pauseIcon.style.opacity = active ? '0' : '0.3';
       pauseIcon.style.pointerEvents = active ? 'none' : '';
     }
-    if (orb && !active) orb.style.transform = 'scale(1)';
+    if (!active) stopOrbLoop();
   }
 
   function captureWorkletUrl() {
@@ -592,10 +667,6 @@
       if (running) stopVoice();
       else startVoice().catch(() => stopVoice());
     }
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'g') {
-      e.preventDefault();
-      document.body.classList.toggle('show-stalls');
-    }
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
       e.preventDefault();
       const stats = mem.getStorageStats();
@@ -638,6 +709,15 @@
       if (e.target === settingsOverlay) {
         settingsOverlay.classList.remove('visible');
       }
+    });
+  }
+
+  if (muteBtn) {
+    muteBtn.addEventListener('click', () => {
+      micMuted = !micMuted;
+      muteBtn.classList.toggle('is-muted', micMuted);
+      muteBtn.setAttribute('aria-label', micMuted ? 'Unmute microphone' : 'Mute microphone');
+      if (micMuted) clearInterim();
     });
   }
 

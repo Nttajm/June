@@ -7,7 +7,7 @@ import { WebSocketServer } from "ws";
 import { config } from "./lib/states.js";
 import { VoiceSession } from "./lib/session.js";
 import { generateGreeting } from "./lib/llm.js";
-import { buildMemoryThoughtCache, normalizeMemory, consolidateSession } from "./lib/memory.js";
+import { buildMemoryThoughtCache, normalizeMemory, consolidateSession, memoryNow, generateId } from "./lib/memory.js";
 import { consolidateSessionMemory, deduplicateMemories, applyDeduplication } from "./lib/memory-ai.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -71,16 +71,16 @@ const server = http.createServer((req, res) => {
               );
               if (!exists) {
                 normalized.semantic.push({
-                  id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+                  id: generateId(),
                   category: promote.category,
                   subject: promote.subject,
                   value: promote.value,
                   confidence: promote.confidence,
                   source: 'consolidated',
-                  createdAt: Date.now(),
-                  updatedAt: Date.now(),
+                  createdAt: memoryNow(),
+                  updatedAt: memoryNow(),
                   accessCount: 1,
-                  lastAccessedAt: Date.now()
+                  lastAccessedAt: memoryNow()
                 });
               }
             }

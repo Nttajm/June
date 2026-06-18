@@ -10,6 +10,47 @@
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
 
+  function memoryNow() {
+    return new Date().toISOString();
+  }
+
+  function memoryTimeMs(value) {
+    if (value == null) return 0;
+    if (typeof value === 'number') return value;
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? 0 : ms;
+  }
+
+  function toMemoryDate(value) {
+    if (value == null) return null;
+    if (typeof value === 'string' && !/^\d+$/.test(value)) {
+      const ms = Date.parse(value);
+      return Number.isNaN(ms) ? memoryNow() : new Date(ms).toISOString();
+    }
+    const n = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(n) || n <= 0) return memoryNow();
+    return new Date(n).toISOString();
+  }
+
+  function migrateMemoryDates(memory) {
+    if (!memory?.meta) return memory;
+    for (const field of ['createdAt', 'lastSessionAt', 'previousSessionAt', 'consolidatedAt']) {
+      if (memory.meta[field] != null) memory.meta[field] = toMemoryDate(memory.meta[field]);
+    }
+    for (const sem of memory.semantic || []) {
+      for (const field of ['createdAt', 'updatedAt', 'lastAccessedAt']) {
+        if (sem[field] != null) sem[field] = toMemoryDate(sem[field]);
+      }
+    }
+    for (const ep of memory.episodic || []) {
+      if (ep.createdAt != null) ep.createdAt = toMemoryDate(ep.createdAt);
+    }
+    for (const log of memory.logs || []) {
+      if (log.ts != null) log.ts = toMemoryDate(log.ts);
+    }
+    return memory;
+  }
+
   function inferCategory(key, value) {
     const k = (key || '').toLowerCase();
     const v = (value || '').toLowerCase();
@@ -29,8 +70,9 @@
       episodic: [],
       logs: [],
       meta: {
-        createdAt: Date.now(),
+        createdAt: memoryNow(),
         lastSessionAt: null,
+        previousSessionAt: null,
         totalSessions: 0,
         consolidatedAt: null,
         currentSessionId: null
@@ -54,10 +96,10 @@
           value: String(value),
           confidence: 0.8,
           source: 'migrated',
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          createdAt: memoryNow(),
+          updatedAt: memoryNow(),
           accessCount: 1,
-          lastAccessedAt: Date.now()
+          lastAccessedAt: memoryNow()
         });
       }
     }
@@ -67,7 +109,7 @@
         id: generateId(),
         subject: log.subject || '',
         value: log.value || '',
-        ts: log.ts || Date.now(),
+        ts: toMemoryDate(log.ts) || memoryNow(),
         importance: 0.5,
         sessionId: null
       });
@@ -82,7 +124,7 @@
     
     if (!memory.version || memory.version < SCHEMA_VERSION) {
       if (memory.longTerm || memory.logs) {
-        return migrateV1toV2(memory);
+        return migrateMemoryDates(migrateV1toV2(memory));
       }
       return createEmptyMemory();
     }
@@ -93,25 +135,26 @@
     if (!Array.isArray(memory.logs)) memory.logs = [];
     if (!memory.meta) {
       memory.meta = {
-        createdAt: Date.now(),
+        createdAt: memoryNow(),
         lastSessionAt: null,
+        previousSessionAt: null,
         totalSessions: 0,
         consolidatedAt: null,
         currentSessionId: null
       };
     }
-    return memory;
+    return migrateMemoryDates(memory);
   }
 
   function trimMemory(memory) {
     if (memory.logs.length > MAX_LOGS) {
       memory.logs = memory.logs
-        .sort((a, b) => (b.importance || 0.5) - (a.importance || 0.5) || (b.ts || 0) - (a.ts || 0))
+        .sort((a, b) => (b.importance || 0.5) - (a.importance || 0.5) || memoryTimeMs(b.ts) - memoryTimeMs(a.ts))
         .slice(0, MAX_LOGS);
     }
     if (memory.episodic.length > MAX_EPISODIC) {
       memory.episodic = memory.episodic
-        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .sort((a, b) => memoryTimeMs(b.createdAt) - memoryTimeMs(a.createdAt))
         .slice(0, MAX_EPISODIC);
     }
     if (memory.semantic.length > MAX_SEMANTIC) {
@@ -158,8 +201,11 @@
 
   function startSession() {
     const memory = load();
+    if (memory.meta.lastSessionAt && (memory.meta.totalSessions || 0) > 0) {
+      memory.meta.previousSessionAt = memory.meta.lastSessionAt;
+    }
     memory.meta.currentSessionId = generateId();
-    memory.meta.lastSessionAt = Date.now();
+    memory.meta.lastSessionAt = memoryNow();
     memory.meta.totalSessions = (memory.meta.totalSessions || 0) + 1;
     return save(memory);
   }
@@ -204,7 +250,7 @@
     );
     if (existing) {
       existing.value = entry.value;
-      existing.updatedAt = Date.now();
+      existing.updatedAt = memoryNow();
       existing.accessCount = (existing.accessCount || 0) + 1;
       existing.confidence = Math.max(existing.confidence || 0.5, entry.confidence || 0.5);
       if (entry.category) existing.category = entry.category;
@@ -216,10 +262,10 @@
         value: entry.value,
         confidence: entry.confidence || 0.7,
         source: entry.source || 'explicit',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: memoryNow(),
+        updatedAt: memoryNow(),
         accessCount: 1,
-        lastAccessedAt: Date.now()
+        lastAccessedAt: memoryNow()
       });
     }
     return save(memory);
@@ -235,7 +281,7 @@
         id: generateId(),
         subject: log.subject,
         value: log.value,
-        ts: log.ts || Date.now(),
+        ts: toMemoryDate(log.ts) || memoryNow(),
         importance: log.importance || 0.5,
         sessionId: memory.meta?.currentSessionId || null
       });
@@ -256,16 +302,16 @@
       summary: summary.summary,
       topics: summary.topics || [],
       mood: summary.mood || 'neutral',
-      createdAt: Date.now(),
+      createdAt: memoryNow(),
       turnCount: summary.turnCount || 0
     });
-    memory.meta.consolidatedAt = Date.now();
+    memory.meta.consolidatedAt = memoryNow();
     return save(memory);
   }
 
   function markAccessedEntries(ids) {
     const memory = load();
-    const now = Date.now();
+    const now = memoryNow();
     for (const sem of memory.semantic) {
       if (ids.includes(sem.id)) {
         sem.accessCount = (sem.accessCount || 0) + 1;
