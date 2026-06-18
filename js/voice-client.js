@@ -196,7 +196,7 @@
         }
         break;
       case 'assistant_delta':
-        appendAssistantDelta(msg.text, msg.continuation, msg.turnId);
+        appendAssistantDelta(msg.text, msg.continuation, msg.turnId, msg.chunkFlush);
         break;
       case 'assistant_done':
         finalizeAssistant(msg.text, msg.continuation, msg.turnId, msg.speakFallback);
@@ -211,7 +211,7 @@
         droppedTurns.add(msg.turnId);
         flushPlayback();
         cancelBrowserTts();
-        if (playTurn === msg.turnId) playTurn = null;
+        playTurn = null;
         if (currentAssistantMsg && (msg.turnId == null || msg.turnId === assistantTurnId)) {
           lastAssistantMsg = currentAssistantMsg;
           currentAssistantMsg = null;
@@ -253,6 +253,7 @@
     if (!running) return;
     paused = true;
     flushPlayback();
+    playTurn = null;
     currentAssistantMsg = null;
     assistantTurnId = null;
     wordIndex = 0;
@@ -263,6 +264,8 @@
   function resumeVoice() {
     if (!running || !paused) return;
     paused = false;
+    // User gesture (orb / key) — unlock AudioContext before next TTS arrives.
+    if (outCtx?.state === 'suspended') outCtx.resume().catch(() => {});
     showStatus('listening');
     setOrbActive(true);
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -395,19 +398,30 @@
     return msg;
   }
 
+  function appendChunkMarker(textEl) {
+    const span = document.createElement('span');
+    span.className = 'stall-marker';
+    span.textContent = 'chunk';
+    span.title = 'TTS flush boundary';
+    textEl.appendChild(span);
+  }
+
+  function appendTextTokens(textEl, text, { trail = false } = {}) {
+    const tokens = text.split(/(\s+)/);
+    tokens.forEach((token) => {
+      if (!token) return;
+      const span = document.createElement('span');
+      span.className = trail ? 'word word--trail' : 'word';
+      span.textContent = token;
+      span.style.animationDelay = `${wordIndex * 35}ms`;
+      textEl.appendChild(span);
+      if (token.trim()) wordIndex++;
+    });
+  }
+
   function renderAnimatedWords(container, text) {
     container.innerHTML = '';
-    const words = text.split(/(\s+)/);
-    let delay = 0;
-    words.forEach((word) => {
-      if (!word) return;
-      const span = document.createElement('span');
-      span.className = 'word';
-      span.textContent = word;
-      span.style.animationDelay = `${delay}ms`;
-      container.appendChild(span);
-      if (word.trim()) delay += 35;
-    });
+    appendTextTokens(container, text);
   }
 
   function startAssistantMessage(turnId) {
@@ -418,26 +432,18 @@
     wordIndex = 0;
   }
 
-  function appendAssistantDelta(text, continuation = false, turnId = null) {
+  function appendAssistantDelta(text, continuation = false, turnId = null, chunkFlush = 0) {
     if (continuation && lastAssistantMsg) {
       currentAssistantMsg = lastAssistantMsg;
       const textEl = currentAssistantMsg.querySelector('.msg-text');
-      
+
       const br = document.createElement('br');
       textEl.appendChild(br);
       const br2 = document.createElement('br');
       textEl.appendChild(br2);
 
-      const words = text.split(/(\s+)/);
-      words.forEach((word) => {
-        if (!word) return;
-        const span = document.createElement('span');
-        span.className = 'word word--trail';
-        span.textContent = word;
-        span.style.animationDelay = `${wordIndex * 35}ms`;
-        textEl.appendChild(span);
-        if (word.trim()) wordIndex++;
-      });
+      appendTextTokens(textEl, text, { trail: true });
+      for (let i = 0; i < chunkFlush; i++) appendChunkMarker(textEl);
       chatLog.scrollTop = chatLog.scrollHeight;
       return;
     }
@@ -448,16 +454,8 @@
       startAssistantMessage(turnId);
     }
     const textEl = currentAssistantMsg.querySelector('.msg-text');
-    const words = text.split(/(\s+)/);
-    words.forEach((word) => {
-      if (!word) return;
-      const span = document.createElement('span');
-      span.className = 'word';
-      span.textContent = word;
-      span.style.animationDelay = `${wordIndex * 35}ms`;
-      textEl.appendChild(span);
-      if (word.trim()) wordIndex++;
-    });
+    appendTextTokens(textEl, text);
+    for (let i = 0; i < chunkFlush; i++) appendChunkMarker(textEl);
     chatLog.scrollTop = chatLog.scrollHeight;
   }
 
@@ -525,15 +523,20 @@
   }
 
   function playAudio(buffer) {
+    void playAudioAsync(buffer);
+  }
+
+  async function playAudioAsync(buffer) {
     const turnId = new DataView(buffer).getUint32(0, true);
     if (droppedTurns.has(turnId)) return;
+    if (paused || !outCtx) return;
     const pcm = new Float32Array(buffer, 4);
     if (pcm.length === 0) return;
 
-    // Re-resume the context if the browser suspended it (autoplay policy, tab
-    // losing focus, etc.).  This is safe to call repeatedly — it's a no-op when
-    // the context is already running.
-    if (outCtx.state === 'suspended') outCtx.resume().catch(() => {});
+    if (outCtx.state !== 'running') {
+      try { await outCtx.resume(); } catch {}
+    }
+    if (outCtx.state !== 'running') return;
 
     if (turnId !== playTurn) {
       playTurn = turnId;
@@ -658,6 +661,15 @@
     else startVoice().catch(() => stopVoice());
   });
 
+  function toggleStallMarkers(e) {
+    if (!e.shiftKey || e.key.toLowerCase() !== 'g') return false;
+    if (!(e.metaKey || e.ctrlKey)) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    document.body.classList.toggle('show-stalls');
+    return true;
+  }
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'm' && document.activeElement !== typeInput) {
       if (running && paused) {
@@ -667,13 +679,18 @@
       if (running) stopVoice();
       else startVoice().catch(() => stopVoice());
     }
+  });
+
+  // Capture phase so Cmd+Shift+G / Ctrl+Shift+G wins over browser defaults on Mac.
+  document.addEventListener('keydown', (e) => {
+    if (toggleStallMarkers(e)) return;
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
       e.preventDefault();
       const stats = mem.getStorageStats();
       console.log('[JuneMemory] Stats:', stats);
       console.log('[JuneMemory] Current memory:', mem.load());
     }
-  });
+  }, true);
 
   if (textToggle && typeBar) {
     textToggle.addEventListener('click', () => {
