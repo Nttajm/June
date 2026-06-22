@@ -208,7 +208,7 @@ Limits: 100 logs, 20 episodic, 200 semantic (trimmed by importance/access).
 
 ### `lib/memory-ai.js`
 
-Separate “turn intelligence” LLM calls (`MEMORY_AI_MODEL`, default `gpt-4.1`):
+Separate “turn intelligence” LLM calls (`MEMORY_AI_MODEL`, default `gpt-4o-mini`):
 
 | Function | When | Output |
 | --- | --- | --- |
@@ -219,11 +219,11 @@ Separate “turn intelligence” LLM calls (`MEMORY_AI_MODEL`, default `gpt-4.1`
 
 ### `lib/thought-agent.js`
 
-Background associative mind (`THOUGHT_AI_MODEL`, default `gpt-4.1-mini`). Runs debounced on partial transcripts (`THOUGHT_DEBOUNCE_MS`, rate-limited `THOUGHT_RATE_LIMIT_MS`). Produces `asyncThoughtCache` (topic, casualDrops, memoryBridge, juneSelfDrop) merged into the main LLM prompt when confidence ≥ 0.35.
+Background associative mind (`THOUGHT_AI_MODEL`, default `gpt-4o-mini`). Runs debounced on partial transcripts (`THOUGHT_DEBOUNCE_MS`, rate-limited `THOUGHT_RATE_LIMIT_MS`). Produces `asyncThoughtCache` (topic, casualDrops, memoryBridge, juneSelfDrop) merged into the main LLM prompt when confidence ≥ 0.35.
 
 ### `lib/snapshot-agent.js`
 
-Background topic context generator (`SNAPSHOT_AI_MODEL`, default `gpt-4.1`). Generates ~100-150 word conversational snapshots about topics being discussed (shows, sports, people, memories, etc.).
+Background topic context generator (`SNAPSHOT_AI_MODEL`, default `gpt-4o-mini`). Generates ~100-150 word conversational snapshots about topics being discussed (shows, sports, people, memories, etc.).
 
 **Key design: async & non-blocking**
 - Main AI **never waits** for snapshot — uses whatever's cached
@@ -366,19 +366,23 @@ flowchart LR
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP server |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Main conversational LLM |
-| `MEMORY_AI_MODEL` | `gpt-4.1` | Memory analysis & consolidation |
-| `THOUGHT_AI_MODEL` | `gpt-4.1-mini` | Background thoughts |
-| `MAIN_TEMPERATURE` | `0.71` | Main LLM temperature |
+| `MEMORY_AI_MODEL` | `gpt-4o-mini` | Memory analysis & consolidation |
+| `THOUGHT_AI_MODEL` | `gpt-4o-mini` | Background thoughts |
+| `MAIN_TEMPERATURE` | `0.86` | Main LLM temperature |
 | `MEMORY_TOKEN_BUDGET` | `600` | Max tokens of retrieved memory in prompt |
 | `TTS_PROVIDER` | `cartesia` | Default server TTS |
+| `CARTESIA_VOICE_ID` | `f786b574-daa5-4673-aa0c-cbe3e8534c02` | Cartesia TTS voice |
+| `CARTESIA_MODEL` | `sonic-3` | Cartesia TTS model |
+| `ELEVENLABS_VOICE_ID` | (none) | ElevenLabs TTS voice |
+| `ELEVENLABS_MODEL` | `eleven_flash_v2_5` | ElevenLabs TTS model |
 | `STT_SAMPLE_RATE` | `16000` | Mic / Flux rate |
 | `TTS_SAMPLE_RATE` | `24000` | Playback rate |
 | `EAGER_EOT_THRESHOLD` | `0.5` | Flux eager end-of-turn sensitivity |
 | `EOT_THRESHOLD` | `0.7` | Flux final end-of-turn |
 | `EOT_TIMEOUT_MS` | `3000` | Flux silence timeout |
 | `THOUGHT_DEBOUNCE_MS` | `500` | Delay before thought agent runs |
-| `THOUGHT_RATE_LIMIT_MS` | `2000` | Min interval between thought runs |
-| `SNAPSHOT_AI_MODEL` | `gpt-4.1` | Snapshot context model |
+| `THOUGHT_RATE_LIMIT_MS` | `5000` | Min interval between thought runs |
+| `SNAPSHOT_AI_MODEL` | `gpt-4o-mini` | Snapshot context model |
 | `SNAPSHOT_DEBOUNCE_MS` | `800` | Delay before snapshot agent runs |
 | `SNAPSHOT_RATE_LIMIT_MS` | `5000` | Min interval between snapshot runs |
 | `SNAPSHOT_MAX_AGE_MS` | `120000` | How long snapshot stays valid |
