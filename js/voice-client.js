@@ -461,6 +461,14 @@
 
   function finalizeAssistant(fullText, continuation = false, turnId = null, speakFallback = false) {
     if (continuation && lastAssistantMsg) {
+      if (fullText) {
+        for (let i = clientHistory.length - 1; i >= 0; i--) {
+          if (clientHistory[i].role === 'assistant') {
+            clientHistory[i].content = `${clientHistory[i].content} ${fullText}`.trim();
+            break;
+          }
+        }
+      }
       currentAssistantMsg = null;
       assistantTurnId = null;
       wordIndex = 0;
