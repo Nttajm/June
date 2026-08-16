@@ -39,14 +39,17 @@ June/
 │   ├── sttFlux.js         # Deepgram Flux WebSocket client
 │   ├── llm.js             # OpenAI streaming chat + greeting generation
 │   ├── tts.js             # Cartesia / ElevenLabs TTS + stall markers
-│   ├── memory.js          # Memory v2 schema, retrieval, prompt injection
-│   ├── memory-ai.js       # Turn analysis, consolidation, deduplication
+│   ├── memory-store.js    # Category schema v3, scan/get, upserts
+│   ├── memory-tools.js    # Two-step OpenAI tools for main LLM
+│   ├── memory.js          # Prompt builders + conversation heuristics
+│   ├── memory-ai.js       # Async Memory Update / consolidation agents
 │   ├── thought-agent.js   # Background associative “thoughts” for the main LLM
 │   └── functions.js       # Session control: pause, resume, sleep
 │
 ├── js/                    # Browser scripts (IIFEs, no bundler)
 │   ├── voice-client.js    # WebSocket, mic capture, TTS playback, UI events
 │   ├── memory.js          # localStorage persistence (window.JuneMemory)
+│   ├── chat-history.js    # Saved chats sidebar store (window.JuneChatHistory)
 │   ├── index.js           # (empty placeholder)
 │   └── ui.js              # (empty placeholder)
 │
@@ -184,38 +187,42 @@ Models: `OPENAI_MODEL` (default `gpt-4o-mini`), temperature `MAIN_TEMPERATURE`.
 - `provider === "browser"` → server returns `null` TTS; client uses `speechSynthesis` on `speakFallback`.
 - Each generation uses context id `gen-{turnId}`.
 
-### `lib/memory.js` — Memory v2
+### `lib/memory-store.js` — Memory v3 (category schema)
 
-Tiered schema (`version: 2`):
+Category-based long-term memory (`version: 3`):
 
-| Tier | Storage | Role |
-| --- | --- | --- |
-| `identity` | `{ name, age, ... }` | Permanent core facts |
-| `semantic` | `[]` of categorized facts | Long-term knowledge (preference, relationship, etc.) |
-| `episodic` | `[]` of session summaries | Consolidated session recaps |
-| `logs` | `[]` of transient observations | Short-lived; may promote on consolidation |
-| `meta` | session ids, counts, timestamps | Bookkeeping |
+| Category | Role |
+| --- | --- |
+| `general_info` | Foundational facts — inlined into the system prompt |
+| `interests` | Broad hobbies / skills — explore via tools |
+| `topic_deep_dives` | Specific fixations — explore via tools |
+| *(dynamic)* | Memory Update Agent may create new snake_case categories |
 
-Important exports:
+Each category holds `sub_memories[]` of `{ id, title, timestamp, content }`.
 
-- `retrieveRelevantMemories()` — scored retrieval within `MEMORY_TOKEN_BUDGET`
-- `buildMemoryInstructions()` / `buildMemoryEngagement()` — injected into LLM system prompt
-- `applyMemoryUpdates()` — applies memory-ai JSON to the in-memory object
-- `mergeCleanDelta()` / `injectAutoGaps()` — stream parsing, memory tags, stall injection
-- `consolidateSession()` — moves session logs into episodic summary
+Exports: `normalizeMemory`, `scanCategory`, `getSubMemory`, `applyCategoryUpdates`, `getCategoryDirectory`, `getGeneralFacts`.
 
-Limits: 100 logs, 20 episodic, 200 semantic (trimmed by importance/access).
+### `lib/memory-tools.js` — two-step Memory Helper
 
-### `lib/memory-ai.js`
+1. `scan_memory_category` — titles only
+2. `get_memory_detail` — one sub-memory content
 
-Separate “turn intelligence” LLM calls (`MEMORY_AI_MODEL`, default `gpt-4o-mini`):
+`lib/llm.js` `streamReply` runs a bounded tool loop (max 2 rounds). Tool chatter never reaches TTS.
+
+### `lib/memory.js` — prompt builders + conversation heuristics
+
+Builds system-prompt blocks from general_info + category directory. Keeps dry-utterance / rhythm helpers. Old token-budget retrieval removed (tools replace it).
+
+### `lib/memory-ai.js` — Memory Update Agent (async)
 
 | Function | When | Output |
 | --- | --- | --- |
-| `analyzeUserIntent()` | Before each user turn | `pause` / `resume` / null |
-| `analyzeTurnMemory()` | After each assistant reply | memory updates, corrections, setName |
-| `consolidateSessionMemory()` | Session end / sleep | episodic summary + semantic promotions |
-| `deduplicateMemories()` | Periodic (API) | merge duplicate semantic entries |
+| `analyzeUserIntent()` | When paused | `pause` / `resume` / null |
+| `analyzeTurnMemory()` | After each assistant reply (non-blocking) | generalInfo, categorized, corrections, chatTitle |
+| `consolidateSessionMemory()` | Session end / sleep | title, summary, promote upserts |
+| `deduplicateMemories()` | Periodic (API) | merge same-title sub_memories |
+
+Saved chats use `json-templete/history.json` shape. Server sends `chat_saved`; client stores via `js/chat-history.js`.
 
 ### `lib/thought-agent.js`
 
@@ -283,7 +290,8 @@ Raw Int16 PCM chunks @ 16kHz (mic audio).
 | `transcript` | User speech partial or final |
 | `assistant_delta` | Streaming assistant text (`text`, `textWithStalls`, `turnId`) |
 | `assistant_done` | Turn complete (`speakFallback` if browser TTS needed) |
-| `memory_update` | Full memory object after turn analysis |
+| `memory_update` | Full category memory object after turn analysis |
+| `chat_saved` | Saved-chat record for sidebar / localStorage |
 | `function` | `pause`, `resume`, or `sleep` |
 | `interrupt` | Barge-in; includes `turnId` to drop |
 | `tts_provider` | Confirms active provider |
@@ -302,9 +310,9 @@ Raw Int16 PCM chunks @ 16kHz (mic audio).
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/greeting` | Generate opening greeting from memory + timezone context |
-| `POST` | `/api/consolidate` | End-of-session memory consolidation (logs → episodic + semantic) |
-| `POST` | `/api/deduplicate` | Merge duplicate semantic memories (≥5 entries) |
-| `GET` | `/api/memory/stats` | Schema version, limits, scoring weights |
+| `POST` | `/api/consolidate` | End-of-session category upserts + session summary |
+| `POST` | `/api/deduplicate` | Merge duplicate sub_memories within categories |
+| `GET` | `/api/memory/stats` | Schema v3, tool retrieval mode, limits |
 | `GET` | `/` | Serves `june.html` |
 
 ---
@@ -405,12 +413,9 @@ flowchart LR
 | --- | --- |
 | June's personality / speech style | `aichr_2.md` |
 | Turn latency / barge-in / speculative logic | `lib/session.js`, `lib/sttFlux.js` |
-| What June remembers per turn | `lib/memory-ai.js`, `lib/memory.js` (`applyMemoryUpdates`) |
-| Memory retrieval / prompt injection | `lib/memory.js` (`retrieveRelevantMemories`, `buildMemoryInstructions`) |
-| Background “pop-up thoughts” | `lib/thought-agent.js`, `lib/llm.js` (`buildThoughtHints`) |
-| Topic context snapshots | `lib/snapshot-agent.js`, `lib/llm.js` (`buildSnapshotContext`) |
-| TTS voice / provider | `.env`, `lib/tts.js`, settings UI in `june.html` |
-| UI / orb / chat display | `june.html`, `css/index.css`, `js/voice-client.js` |
+| What June remembers per turn | `lib/memory-ai.js`, `lib/memory-store.js` (`applyCategoryUpdates`) |
+| Two-step memory retrieval | `lib/memory-tools.js`, `lib/llm.js` |
+| Chat history sidebar | `june.html`, `js/chat-history.js`, `js/voice-client.js` |
 | Client memory persistence | `js/memory.js` |
 | New REST endpoint | `server.js` |
 | Env / ports / models | `lib/states.js`, `.env.example` |

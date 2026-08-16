@@ -586,3 +586,390 @@ button {
     background: var(--bg);
     color: var(--text);
 }
+
+.nav-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.history-btn {
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.history-btn:hover {
+    opacity: 1;
+}
+
+.chat-sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 150;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+.chat-sidebar-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.chat-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: min(320px, 88vw);
+    height: 100vh;
+    background: var(--bg);
+    z-index: 160;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(-105%);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+    padding: 1rem 0.75rem 1.25rem;
+}
+
+.chat-sidebar.open {
+    transform: translateX(0);
+}
+
+.chat-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.5rem 1rem;
+}
+
+.chat-sidebar-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.85;
+}
+
+.chat-sidebar-close {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: inherit;
+    font-size: 1.25rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.chat-sidebar-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0 0.25rem;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+}
+
+.chat-sidebar-item {
+    text-align: left;
+    width: 100%;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.75rem;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid transparent;
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.chat-sidebar-item:hover {
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.chat-sidebar-item-title {
+    font-size: 0.9rem;
+    font-weight: 550;
+    line-height: 1.3;
+}
+
+.chat-sidebar-item-time {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+}
+
+.chat-sidebar-item-summary {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.65);
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.chat-sidebar-empty {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 2rem 1rem;
+    margin: 0;
+    display: none;
+}
+
+.chat-sidebar-empty.visible {
+    display: block;
+}
+
+/* ── Agent Inspector (Ctrl/Cmd+Shift+G) ─────────────────────────────── */
+
+.agent-inspector {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2000;
+    height: 35vh;
+    min-height: 180px;
+    max-height: 55vh;
+    display: none;
+    flex-direction: column;
+    background: #12141a;
+    color: #d6d9e0;
+    border-top: 1px solid #2a2f3a;
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.35);
+}
+
+body.agent-inspector-open .agent-inspector {
+    display: flex;
+}
+
+body.agent-inspector-open .hints {
+    margin-bottom: calc(35vh + 0.5rem);
+}
+
+.agent-inspector-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid #2a2f3a;
+    background: #181b22;
+    flex-shrink: 0;
+}
+
+.agent-inspector-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.agent-inspector-title {
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    color: #f0f2f6;
+    white-space: nowrap;
+}
+
+.agent-inspector-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+}
+
+.ai-pill {
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid #3a4150;
+    color: #8b93a3;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.ai-pill.is-live {
+    color: #0b1220;
+    border-color: transparent;
+    background: #7dd3a0;
+    animation: ai-pulse 1.2s ease infinite;
+}
+
+@keyframes ai-pulse {
+    50% { opacity: 0.7; }
+}
+
+.agent-inspector-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.agent-inspector-filter-label,
+.agent-inspector-stalls {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: #9aa3b5;
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.agent-inspector-select {
+    background: #0e1015;
+    color: #e6e9ef;
+    border: 1px solid #3a4150;
+    border-radius: 4px;
+    padding: 0.15rem 0.3rem;
+    font: inherit;
+}
+
+.agent-inspector-btn {
+    background: #222733;
+    color: #e6e9ef;
+    border: 1px solid #3a4150;
+    border-radius: 4px;
+    padding: 0.2rem 0.55rem;
+    font: inherit;
+    cursor: pointer;
+}
+
+.agent-inspector-btn:hover {
+    background: #2c3342;
+}
+
+.agent-inspector-btn--close {
+    font-size: 16px;
+    line-height: 1;
+    padding: 0.1rem 0.45rem;
+}
+
+.agent-inspector-timeline {
+    flex: 1;
+    overflow: auto;
+    padding: 0.25rem 0;
+}
+
+.ai-row {
+    border-bottom: 1px solid #1c2029;
+}
+
+.ai-row-head {
+    display: grid;
+    grid-template-columns: 64px 72px 72px 56px 1fr;
+    gap: 0.4rem;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    padding: 0.28rem 0.75rem;
+    cursor: pointer;
+}
+
+.ai-row-head:hover {
+    background: #1a1e27;
+}
+
+.ai-row.is-open .ai-row-head {
+    background: #1e2430;
+}
+
+.ai-ts {
+    color: #6b7385;
+}
+
+.ai-badge {
+    font-weight: 650;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.03em;
+}
+
+.ai-badge--main { color: #8ec8ff; }
+.ai-badge--thinker { color: #c4a3ff; }
+.ai-badge--snapshot { color: #7dd3a0; }
+.ai-badge--memory { color: #f0c674; }
+.ai-badge--followup { color: #f0a0b8; }
+
+.ai-phase {
+    color: #aab2c2;
+}
+
+.ai-dur {
+    color: #6b7385;
+}
+
+.ai-sum {
+    color: #c8ced9;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-row--tool .ai-phase { color: #7dd3a0; }
+.ai-row--skipped .ai-sum { color: #8b93a3; }
+.ai-row--aborted .ai-sum { color: #ff8b8b; }
+.ai-row--injected .ai-phase { color: #f0c674; }
+
+.ai-row-detail {
+    margin: 0;
+    padding: 0.4rem 0.75rem 0.65rem 0.75rem;
+    background: #0c0e13;
+    color: #b8c0d0;
+    font-size: 11px;
+    line-height: 1.4;
+    overflow: auto;
+    max-height: 180px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.agent-inspector-hint {
+    margin: 0;
+    padding: 0.25rem 0.75rem 0.4rem;
+    color: #5c6578;
+    font-size: 10px;
+    border-top: 1px solid #1c2029;
+    flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+    .ai-row-head {
+        grid-template-columns: 52px 64px 1fr;
+        grid-template-rows: auto auto;
+    }
+    .ai-dur { display: none; }
+    .ai-sum {
+        grid-column: 1 / -1;
+    }
+}

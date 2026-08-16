@@ -10,13 +10,31 @@
 <body>
     <div class="nav-holder">
         <span class="logo">JUNE</span>
-        <button class="setting-wheel" aria-label="Settings">
-            <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
-        </button>
+        <div class="nav-actions">
+            <button class="history-btn" id="historyBtn" aria-label="Chat history" title="Chat history">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+            </button>
+            <button class="setting-wheel" aria-label="Settings">
+                <svg class="settings-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+            </button>
+        </div>
     </div>
+
+    <aside class="chat-sidebar" id="chatSidebar" aria-hidden="true">
+        <div class="chat-sidebar-header">
+            <span class="chat-sidebar-title">Chats</span>
+            <button class="chat-sidebar-close" id="chatSidebarClose" aria-label="Close">&times;</button>
+        </div>
+        <div class="chat-sidebar-list" id="chatSidebarList"></div>
+        <p class="chat-sidebar-empty" id="chatSidebarEmpty">No saved chats yet</p>
+    </aside>
+    <div class="chat-sidebar-backdrop" id="chatSidebarBackdrop"></div>
 
     <main class="card">
         <section class="chat">
@@ -53,7 +71,7 @@
         </section>
     </main>
 
-    <p class="hints">always on · hang on / shush to pause · orb or <kbd>m</kbd> to resume · say go to sleep to end</p>
+    <p class="hints">always on · hang on / shush to pause · orb or <kbd>m</kbd> to resume · say go to sleep to end · <kbd>Ctrl+Shift+G</kbd> agents</p>
 
     <div class="settings-overlay" id="settingsOverlay">
         <div class="settings-modal">
@@ -68,12 +86,52 @@
                         <option value="browser">Browser</option>
                     </select>
                 </label>
+                <label class="settings-label" id="elevenLabsModelRow">
+                    <span>ElevenLabs Model</span>
+                    <select class="settings-select" id="elevenLabsModelSelect">
+                        <option value="eleven_flash_v2_5">Flash v2.5 (realtime)</option>
+                        <option value="eleven_v3">Eleven v3 (expressive)</option>
+                    </select>
+                </label>
             </div>
         </div>
     </div>
 
+    <div class="agent-inspector" id="agentInspector" aria-hidden="true">
+        <div class="agent-inspector-header">
+            <div class="agent-inspector-title-row">
+                <span class="agent-inspector-title">Agent Inspector</span>
+                <div class="agent-inspector-pills" id="agentInspectorPills"></div>
+            </div>
+            <div class="agent-inspector-controls">
+                <label class="agent-inspector-filter-label">
+                    Filter
+                    <select id="agentInspectorFilter" class="agent-inspector-select">
+                        <option value="all">all</option>
+                        <option value="main">main</option>
+                        <option value="thinker">thinker</option>
+                        <option value="snapshot">snapshot</option>
+                        <option value="memory">memory</option>
+                        <option value="followup">followup</option>
+                    </select>
+                </label>
+                <label class="agent-inspector-stalls">
+                    <input type="checkbox" id="agentInspectorStalls" />
+                    Show stall markers
+                </label>
+                <button type="button" class="agent-inspector-btn" id="agentInspectorCopy" title="Copy all agent traces as JSON">Copy all</button>
+                <button type="button" class="agent-inspector-btn" id="agentInspectorClear">Clear</button>
+                <button type="button" class="agent-inspector-btn agent-inspector-btn--close" id="agentInspectorClose" aria-label="Close">&times;</button>
+            </div>
+        </div>
+        <div class="agent-inspector-timeline" id="agentInspectorTimeline"></div>
+        <p class="agent-inspector-hint">Ctrl/Cmd+Shift+G to toggle · click a row for full detail · Copy all pastes JSON for debugging</p>
+    </div>
+
     <script src="js/index.js"></script>
     <script src="js/memory.js"></script>
+    <script src="js/chat-history.js"></script>
+    <script src="js/agent-inspector.js"></script>
     <script src="js/voice-client.js"></script>
 </body>
 </html>

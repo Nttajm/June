@@ -7,7 +7,8 @@ import { WebSocketServer } from "ws";
 import { config } from "./lib/states.js";
 import { VoiceSession } from "./lib/session.js";
 import { generateGreeting } from "./lib/llm.js";
-import { buildMemoryThoughtCache, normalizeMemory, consolidateSession, memoryNow, generateId } from "./lib/memory.js";
+import { buildMemoryThoughtCache, normalizeMemory, consolidateSession } from "./lib/memory.js";
+import { applyCategoryUpdates, getCategoryDirectory, SCHEMA_VERSION, MAX_SUB_MEMORIES_PER_CATEGORY } from "./lib/memory-store.js";
 import { consolidateSessionMemory, deduplicateMemories, applyDeduplication } from "./lib/memory-ai.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -36,6 +37,7 @@ const server = http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ text }));
       } catch (err) {
+        console.error("[greeting]", err.message);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
       }
@@ -50,45 +52,31 @@ const server = http.createServer((req, res) => {
       try {
         const { memory, history } = JSON.parse(body || "{}");
         let normalized = normalizeMemory(memory);
-        
-        const sessionId = normalized.meta?.currentSessionId;
-        const sessionLogs = normalized.logs.filter(l => l.sessionId === sessionId);
-        
-        if (sessionLogs.length >= 3) {
-          const consolidationResult = await consolidateSessionMemory({
-            sessionLogs,
-            history: history || [],
-            existingSemanticMemory: normalized.semantic
-          });
-          
-          if (consolidationResult) {
-            normalized = consolidateSession(normalized, consolidationResult.sessionSummary);
-            
-            for (const promote of consolidationResult.promoteToSemantic || []) {
-              const exists = normalized.semantic.some(
-                s => s.subject.toLowerCase() === promote.subject.toLowerCase() &&
-                     s.value.toLowerCase() === promote.value.toLowerCase()
-              );
-              if (!exists) {
-                normalized.semantic.push({
-                  id: generateId(),
-                  category: promote.category,
-                  subject: promote.subject,
-                  value: promote.value,
-                  confidence: promote.confidence,
-                  source: 'consolidated',
-                  createdAt: memoryNow(),
-                  updatedAt: memoryNow(),
-                  accessCount: 1,
-                  lastAccessedAt: memoryNow()
-                });
-              }
-            }
-          }
+
+        const consolidationResult = await consolidateSessionMemory({
+          history: history || [],
+          memory: normalized,
+          existingDirectory: getCategoryDirectory(normalized),
+        });
+
+        if (consolidationResult?.sessionSummary) {
+          normalized = consolidateSession(normalized, consolidationResult.sessionSummary);
         }
-        
+        for (const promote of consolidationResult?.promote || []) {
+          normalized = applyCategoryUpdates(normalized, {
+            categorized: [promote],
+            generalInfo: promote.category === "general_info"
+              ? [{ title: promote.title, content: promote.content }]
+              : [],
+          });
+        }
+
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ memory: normalized, consolidated: true }));
+        res.end(JSON.stringify({
+          memory: normalized,
+          consolidated: Boolean(consolidationResult),
+          sessionSummary: consolidationResult?.sessionSummary || null,
+        }));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
@@ -102,18 +90,13 @@ const server = http.createServer((req, res) => {
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", async () => {
       try {
-        const { memory } = JSON.parse(body || "{}");
-        let normalized = normalizeMemory(memory);
-        
-        if (normalized.semantic.length >= 5) {
-          const dedupeResult = await deduplicateMemories(normalized.semantic);
-          if (dedupeResult?.merges?.length) {
-            normalized = applyDeduplication(normalized, dedupeResult);
-          }
+        let normalized = normalizeMemory(JSON.parse(body || "{}").memory);
+        const dedupeResult = await deduplicateMemories(normalized);
+        if (dedupeResult?.merges?.length) {
+          normalized = applyDeduplication(normalized, dedupeResult);
         }
-        
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ memory: normalized }));
+        res.end(JSON.stringify({ memory: normalized, merges: dedupeResult?.merges?.length || 0 }));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
@@ -125,18 +108,17 @@ const server = http.createServer((req, res) => {
   if (urlPath === "/api/memory/stats" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: SCHEMA_VERSION,
+      systemId: "gemma_core_memory",
       limits: {
-        maxLogs: 100,
-        maxEpisodic: 20,
-        maxSemantic: 200
+        maxSubMemoriesPerCategory: MAX_SUB_MEMORIES_PER_CATEGORY,
       },
-      scoring: {
-        keywordRelevance: 0.45,
-        freshness: 0.30,
-        importance: 0.15,
-        accessFrequency: 0.10
-      }
+      retrieval: {
+        mode: "two_step_tools",
+        tools: ["scan_memory_category", "get_memory_detail"],
+        maxToolRounds: 2,
+      },
+      defaultCategories: ["general_info", "interests", "topic_deep_dives"],
     }));
     return;
   }
@@ -163,7 +145,7 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server, path: "/voice" });
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
   const send = (obj) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
   };
@@ -175,6 +157,13 @@ wss.on("connection", (ws) => {
   };
 
   const session = new VoiceSession({ send, sendAudio });
+  const remote = req?.socket?.remoteAddress || "";
+  const isLocal =
+    remote === "127.0.0.1" ||
+    remote === "::1" ||
+    remote === "::ffff:127.0.0.1" ||
+    remote.endsWith("127.0.0.1");
+  if (isLocal) session.setDebugTracing(true);
   session.start();
 
   ws.on("message", (data, isBinary) => {
@@ -191,11 +180,24 @@ wss.on("connection", (ws) => {
     if (msg.type === "init") {
       session.setMemory(msg.memory, msg.context);
       if (msg.history) session.setHistory(msg.history);
+      if (msg.pastChats) session.setPastChats(msg.pastChats);
+      // Apply model before provider so ElevenLabs is created on the chosen model.
+      if (msg.elevenLabsModel) session.setElevenLabsModel(msg.elevenLabsModel);
       if (msg.ttsProvider) session.setTtsProvider(msg.ttsProvider);
+      if (isLocal) session.setDebugTracing(true);
+      else if (msg.debug != null) session.setDebugTracing(Boolean(msg.debug));
     }
-    else if (msg.type === "text") session.handleText(msg.text);
+    else if (msg.type === "text") {
+      session.handleText(msg.text);
+    }
     else if (msg.type === "resume") session.resume();
     else if (msg.type === "set_tts_provider") session.setTtsProvider(msg.provider);
+    else if (msg.type === "set_tts_model") session.setElevenLabsModel(msg.model);
+    else if (msg.type === "set_debug") {
+      // Localhost keeps tracing on so the client ring-buffer stays warm.
+      if (isLocal && !msg.enabled) return;
+      session.setDebugTracing(Boolean(msg.enabled));
+    }
   });
 
   ws.on("close", () => session.close());
@@ -213,7 +215,7 @@ if (!config.cartesiaKey && !config.elevenLabsKey) {
   console.log(`[june] TTS providers available: ${providers.join(", ")}, Browser`);
 }
 
-console.log(`[june] Memory system v2 active — tiered storage with smart retrieval`);
+console.log(`[june] Memory system v${SCHEMA_VERSION} — category schema + two-step retrieval tools`);
 
 server.listen(config.port, () => {
   console.log(`[june] voice agent listening on http://localhost:${config.port}`);

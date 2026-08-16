@@ -19,12 +19,70 @@
   const settingsOverlay = document.getElementById('settingsOverlay');
   const settingsClose = document.getElementById('settingsClose');
   const ttsProviderSelect = document.getElementById('ttsProviderSelect');
+  const elevenLabsModelSelect = document.getElementById('elevenLabsModelSelect');
+  const elevenLabsModelRow = document.getElementById('elevenLabsModelRow');
   const muteBtn = document.getElementById('muteBtn');
+  const historyBtn = document.getElementById('historyBtn');
+  const chatSidebar = document.getElementById('chatSidebar');
+  const chatSidebarList = document.getElementById('chatSidebarList');
+  const chatSidebarEmpty = document.getElementById('chatSidebarEmpty');
+  const chatSidebarClose = document.getElementById('chatSidebarClose');
+  const chatSidebarBackdrop = document.getElementById('chatSidebarBackdrop');
 
   const mem = window.JuneMemory;
+  // Always resolve at call-time so a missing/late script can't permanently no-op saves
+  function chatsApi() {
+    if (window.JuneChatHistory) return window.JuneChatHistory;
+    // Minimal inline fallback if chat-history.js failed to load
+    const KEY = 'june_saved_chats';
+    const api = {
+      list() {
+        try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch { return []; }
+      },
+      save(record) {
+        if (!record?.session_id) return api.list();
+        const next = api.list().filter((c) => c.session_id !== record.session_id);
+        next.unshift(record);
+        localStorage.setItem(KEY, JSON.stringify(next.slice(0, 50)));
+        return next;
+      },
+      get(id) { return api.list().find((c) => c.session_id === id) || null; },
+      formatTime(iso) {
+        try {
+          return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        } catch { return String(iso || ''); }
+      },
+    };
+    window.JuneChatHistory = api;
+    console.warn('[June] JuneChatHistory missing — using inline fallback');
+    return api;
+  }
+
+  function buildPastChatsPayload(limit = 15) {
+    return chatsApi().list().slice(0, limit).map((c) => ({
+      session_id: c.session_id,
+      title: c.title,
+      main_summary: c.main_summary,
+      end_time: c.end_time,
+      topics: c.extracted_context?.topics_detected || [],
+      previewTurns: Array.isArray(c.chats)
+        ? c.chats.slice(-6).map((t) => ({
+            role: t.role,
+            content: String(t.content || '').slice(0, 180),
+          }))
+        : [],
+    }));
+  }
+
   let currentMemory = mem.load();
   let currentTtsProvider = localStorage.getItem('june_tts_provider') || 'elevenlabs';
+  let currentElevenLabsModel = localStorage.getItem('june_elevenlabs_model') || 'eleven_flash_v2_5';
   let availableTtsProviders = ['browser'];
+  let availableElevenLabsModels = [
+    { id: 'eleven_flash_v2_5', label: 'Flash v2.5 (realtime)' },
+    { id: 'eleven_v3', label: 'Eleven v3 (expressive)' },
+  ];
+  let activeSessionId = null;
 
   let ws = null;
   let running = false;
@@ -77,8 +135,23 @@
     });
 
     currentMemory = mem.startSession();
+    activeSessionId = mem.getSessionId() || ('local_' + Date.now().toString(36));
+    sessionStartedAtIso = new Date().toISOString();
     const ctx = { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
-    ws.send(JSON.stringify({ type: 'init', memory: currentMemory, context: ctx, ttsProvider: currentTtsProvider, history: clientHistory }));
+    ws.send(JSON.stringify({
+      type: 'init',
+      memory: currentMemory,
+      context: ctx,
+      ttsProvider: currentTtsProvider,
+      elevenLabsModel: currentElevenLabsModel,
+      history: clientHistory,
+      pastChats: buildPastChatsPayload(),
+      debug:
+        Boolean(window.JuneAgentInspector?.isOpen?.()) ||
+        location.hostname === 'localhost' ||
+        location.hostname === '127.0.0.1',
+    }));
+    window.JuneAgentInspector?.onWsReady?.();
 
     if (!on) {
     micStream = await navigator.mediaDevices.getUserMedia({
@@ -117,6 +190,8 @@
 
   function stopVoice() {
     if (!running) return;
+    // Persist before tearing down the socket — server chat_saved often loses the race.
+    persistCurrentChatLocally();
     running = false;
     paused = false;
     micMuted = false;
@@ -168,19 +243,68 @@
       playAudio(ev.data);
       return;
     }
-    const msg = JSON.parse(ev.data);
+    let msg;
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
     switch (msg.type) {
       case 'ready':
         if (msg.ttsProviders) {
           availableTtsProviders = msg.ttsProviders;
           updateTtsProviderOptions();
         }
-        if (msg.ttsProvider) currentTtsProvider = msg.ttsProvider;
+        if (msg.elevenLabsModels) {
+          availableElevenLabsModels = msg.elevenLabsModels;
+          updateElevenLabsModelOptions();
+        }
+        if (msg.ttsProvider) {
+          // Prefer the client's saved provider; only adopt server default if we have none.
+          if (!localStorage.getItem('june_tts_provider')) {
+            currentTtsProvider = msg.ttsProvider;
+          }
+          if (ttsProviderSelect) ttsProviderSelect.value = currentTtsProvider;
+        }
+        // Never let server env Flash clobber a user-selected ElevenLabs model.
+        if (elevenLabsModelSelect) elevenLabsModelSelect.value = currentElevenLabsModel;
+        syncElevenLabsModelVisibility();
+        // Re-assert preference if the live session started on a different model.
+        if (
+          ws &&
+          ws.readyState === WebSocket.OPEN &&
+          currentTtsProvider === 'elevenlabs' &&
+          msg.elevenLabsModel &&
+          msg.elevenLabsModel !== currentElevenLabsModel
+        ) {
+          ws.send(JSON.stringify({ type: 'set_tts_model', model: currentElevenLabsModel }));
+        }
+        if (
+          ws &&
+          ws.readyState === WebSocket.OPEN &&
+          msg.ttsProvider &&
+          msg.ttsProvider !== currentTtsProvider
+        ) {
+          ws.send(JSON.stringify({ type: 'set_tts_provider', provider: currentTtsProvider }));
+        }
         break;
       case 'tts_provider':
         currentTtsProvider = msg.provider;
         localStorage.setItem('june_tts_provider', msg.provider);
         if (ttsProviderSelect) ttsProviderSelect.value = msg.provider;
+        if (msg.elevenLabsModel && !localStorage.getItem('june_elevenlabs_model')) {
+          currentElevenLabsModel = msg.elevenLabsModel;
+        }
+        if (elevenLabsModelSelect) elevenLabsModelSelect.value = currentElevenLabsModel;
+        syncElevenLabsModelVisibility();
+        break;
+      case 'tts_model':
+        if (msg.elevenLabsModel) {
+          currentElevenLabsModel = msg.elevenLabsModel;
+          localStorage.setItem('june_elevenlabs_model', currentElevenLabsModel);
+          if (elevenLabsModelSelect) elevenLabsModelSelect.value = currentElevenLabsModel;
+          console.log('[June] TTS model confirmed:', currentElevenLabsModel);
+        }
         break;
       case 'state':
         handleState(msg.state);
@@ -204,6 +328,14 @@
       case 'memory_update':
         currentMemory = mem.applyFromServer(msg.memory);
         break;
+      case 'chat_saved':
+        if (msg.chat) {
+          chatsApi().save(msg.chat);
+          if (msg.chat.session_id) activeSessionId = msg.chat.session_id;
+          renderChatSidebar();
+          console.log('[June] chat_saved from server →', msg.chat.title, chatsApi().list().length, 'total');
+        }
+        break;
       case 'function':
         handleFunction(msg.name);
         break;
@@ -219,6 +351,9 @@
           wordIndex = 0;
         }
         break;
+      case 'agent_trace':
+        window.JuneAgentInspector?.push?.(msg);
+        break;
     }
   }
 
@@ -233,10 +368,30 @@
       ttsProviderSelect.appendChild(opt);
     }
     ttsProviderSelect.value = currentTtsProvider;
+    syncElevenLabsModelVisibility();
+  }
+
+  function updateElevenLabsModelOptions() {
+    if (!elevenLabsModelSelect) return;
+    elevenLabsModelSelect.innerHTML = '';
+    for (const m of availableElevenLabsModels) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label || m.id;
+      elevenLabsModelSelect.appendChild(opt);
+    }
+    elevenLabsModelSelect.value = currentElevenLabsModel;
+  }
+
+  function syncElevenLabsModelVisibility() {
+    if (!elevenLabsModelRow) return;
+    const show = currentTtsProvider === 'elevenlabs';
+    elevenLabsModelRow.style.display = show ? '' : 'none';
   }
 
   function handleFunction(name) {
     if (name === 'sleep') {
+      // Server sends chat_saved before sleep; stopVoice still persists as fallback.
       stopVoice();
       return;
     }
@@ -353,8 +508,76 @@
   }
 
   let clientHistory = [];
+  let sessionStartedAtIso = null;
 
-  function addMessage(role, text, animate = false) {
+  function deriveChatTitle(history) {
+    const firstUser = history.find((m) => m.role === 'user' && m.content);
+    if (!firstUser) return 'Conversation';
+    const t = String(firstUser.content).trim().replace(/\s+/g, ' ');
+    if (t.length <= 48) return t;
+    return t.slice(0, 45).trim() + '…';
+  }
+
+  function deriveChatSummary(history) {
+    const users = history.filter((m) => m.role === 'user').map((m) => m.content).filter(Boolean);
+    if (users.length === 0) return 'Voice conversation with June.';
+    if (users.length === 1) return users[0].slice(0, 160);
+    return `Talked about: ${users.slice(0, 3).map((u) => u.slice(0, 40)).join(' · ')}`;
+  }
+
+  /** Persist current session to localStorage. Runs every turn + on stop/unload. */
+  function persistCurrentChatLocally() {
+    try {
+      const api = chatsApi();
+      const hasUser = clientHistory.some((m) => m.role === 'user' && String(m.content || '').trim());
+      if (!hasUser) return false;
+
+      const sessionId = activeSessionId
+        || (mem.getSessionId && mem.getSessionId())
+        || ('local_' + Date.now().toString(36));
+      activeSessionId = sessionId;
+
+      const existing = api.get(sessionId);
+      const localTitle = deriveChatTitle(clientHistory);
+      const localSummary = deriveChatSummary(clientHistory);
+
+      const record = {
+        session_id: sessionId,
+        title: (existing?.title && existing.title !== 'Conversation') ? existing.title : localTitle,
+        start_time: existing?.start_time || sessionStartedAtIso || new Date().toISOString(),
+        end_time: new Date().toISOString(),
+        main_summary: (existing?.main_summary && existing.main_summary !== 'Voice conversation with June.')
+          ? existing.main_summary
+          : localSummary,
+        session_metrics: {
+          total_turns: clientHistory.filter((m) => m.role === 'user').length,
+          user_interruptions: existing?.session_metrics?.user_interruptions || 0,
+          average_ttft_ms: existing?.session_metrics?.average_ttft_ms ?? null,
+        },
+        chats: clientHistory.map((m, i) => ({
+          turn_id: i + 1,
+          role: m.role,
+          timestamp: new Date().toISOString(),
+          content: m.content,
+          metadata: {},
+        })),
+        extracted_context: existing?.extracted_context || {
+          topics_detected: [],
+          action_items_generated: false,
+        },
+      };
+
+      api.save(record);
+      renderChatSidebar();
+      console.log('[June] saved chat → localStorage[june_saved_chats]', record.title, api.list().length, 'total');
+      return true;
+    } catch (err) {
+      console.error('[June] persistCurrentChatLocally failed:', err);
+      return false;
+    }
+  }
+
+  function addMessage(role, text, animate = false, { persist = true } = {}) {
     if (role === 'user') {
       const norm = text.trim().toLowerCase().replace(/\s+/g, ' ');
       if (norm && norm === lastUserMsgText && Date.now() - lastUserMsgAt < 4000) return null;
@@ -363,6 +586,9 @@
     }
 
     clientHistory.push({ role, content: text });
+
+    // Save as soon as the user has spoken — don't wait for session end
+    if (persist && role === 'user') persistCurrentChatLocally();
 
     const msg = document.createElement('div');
     msg.className = `msg msg--${role}`;
@@ -508,6 +734,8 @@
       hideStatus();
       setOrbActive(false);
     }
+
+    persistCurrentChatLocally();
   }
 
   let browserTtsUtterance = null;
@@ -669,12 +897,12 @@
     else startVoice().catch(() => stopVoice());
   });
 
-  function toggleStallMarkers(e) {
+  function toggleAgentInspector(e) {
     if (!e.shiftKey || e.key.toLowerCase() !== 'g') return false;
     if (!(e.metaKey || e.ctrlKey)) return false;
     e.preventDefault();
     e.stopPropagation();
-    document.body.classList.toggle('show-stalls');
+    window.JuneAgentInspector?.toggle?.();
     return true;
   }
 
@@ -691,7 +919,7 @@
 
   // Capture phase so Cmd+Shift+G / Ctrl+Shift+G wins over browser defaults on Mac.
   document.addEventListener('keydown', (e) => {
-    if (toggleStallMarkers(e)) return;
+    if (toggleAgentInspector(e)) return;
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
       e.preventDefault();
       const stats = mem.getStorageStats();
@@ -699,6 +927,11 @@
       console.log('[JuneMemory] Current memory:', mem.load());
     }
   }, true);
+
+  // Expose minimal API for the inspector to send set_debug over the live socket.
+  window.JuneVoice = {
+    getWs() { return ws; },
+  };
 
   if (textToggle && typeBar) {
     textToggle.addEventListener('click', () => {
@@ -751,8 +984,23 @@
       const newProvider = ttsProviderSelect.value;
       currentTtsProvider = newProvider;
       localStorage.setItem('june_tts_provider', newProvider);
+      syncElevenLabsModelVisibility();
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'set_tts_provider', provider: newProvider }));
+      }
+    });
+  }
+
+  if (elevenLabsModelSelect) {
+    updateElevenLabsModelOptions();
+    elevenLabsModelSelect.value = currentElevenLabsModel;
+    syncElevenLabsModelVisibility();
+    elevenLabsModelSelect.addEventListener('change', () => {
+      const model = elevenLabsModelSelect.value;
+      currentElevenLabsModel = model;
+      localStorage.setItem('june_elevenlabs_model', model);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'set_tts_model', model }));
       }
     });
   }
@@ -773,6 +1021,102 @@
     hideStatus();
   }
 
+  function openChatSidebar() {
+    if (!chatSidebar) return;
+    renderChatSidebar();
+    chatSidebar.classList.add('open');
+    chatSidebar.setAttribute('aria-hidden', 'false');
+    if (chatSidebarBackdrop) chatSidebarBackdrop.classList.add('visible');
+  }
+
+  function closeChatSidebar() {
+    if (!chatSidebar) return;
+    chatSidebar.classList.remove('open');
+    chatSidebar.setAttribute('aria-hidden', 'true');
+    if (chatSidebarBackdrop) chatSidebarBackdrop.classList.remove('visible');
+  }
+
+  function renderChatSidebar() {
+    if (!chatSidebarList) return;
+    const api = chatsApi();
+    const chats = api.list();
+    chatSidebarList.innerHTML = '';
+    if (chatSidebarEmpty) {
+      chatSidebarEmpty.classList.toggle('visible', chats.length === 0);
+    }
+    for (const chat of chats) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chat-sidebar-item';
+      btn.dataset.sessionId = chat.session_id;
+
+      const title = document.createElement('span');
+      title.className = 'chat-sidebar-item-title';
+      title.textContent = chat.title || 'Conversation';
+
+      const time = document.createElement('span');
+      time.className = 'chat-sidebar-item-time';
+      time.textContent = api.formatTime(chat.start_time);
+
+      const summary = document.createElement('span');
+      summary.className = 'chat-sidebar-item-summary';
+      summary.textContent = chat.main_summary || '';
+
+      btn.appendChild(title);
+      btn.appendChild(time);
+      if (chat.main_summary) btn.appendChild(summary);
+      btn.addEventListener('click', () => loadSavedChat(chat.session_id));
+      chatSidebarList.appendChild(btn);
+    }
+  }
+
+  function loadSavedChat(sessionId) {
+    const api = chatsApi();
+    const chat = api.get(sessionId);
+    if (!chat) return;
+
+    closeChatSidebar();
+    chatLog.innerHTML = '';
+    clientHistory = [];
+    currentAssistantMsg = null;
+    lastAssistantMsg = null;
+    assistantTurnId = null;
+    wordIndex = 0;
+    lastUserMsgText = '';
+    lastUserMsgAt = 0;
+    activeSessionId = chat.session_id;
+    sessionStartedAtIso = chat.start_time || new Date().toISOString();
+
+    const turns = Array.isArray(chat.chats) ? chat.chats : [];
+    for (const turn of turns) {
+      if (!turn?.content) continue;
+      const role = turn.role === 'assistant' ? 'assistant' : 'user';
+      addMessage(role, turn.content, false, { persist: false });
+    }
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'init',
+        memory: currentMemory,
+        context: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+        ttsProvider: currentTtsProvider,
+        elevenLabsModel: currentElevenLabsModel,
+        history: clientHistory,
+        pastChats: buildPastChatsPayload(),
+      }));
+    }
+  }
+
+  if (historyBtn) historyBtn.addEventListener('click', openChatSidebar);
+  if (chatSidebarClose) chatSidebarClose.addEventListener('click', closeChatSidebar);
+  if (chatSidebarBackdrop) chatSidebarBackdrop.addEventListener('click', closeChatSidebar);
+
+  window.addEventListener('beforeunload', () => { persistCurrentChatLocally(); });
+  window.addEventListener('pagehide', () => { persistCurrentChatLocally(); });
+
   updateTtsProviderOptions();
+  updateElevenLabsModelOptions();
+  syncElevenLabsModelVisibility();
+  renderChatSidebar();
   loadGreeting();
 })();

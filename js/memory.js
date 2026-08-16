@@ -1,10 +1,42 @@
 (function () {
   const STORAGE_KEY = 'june_memory';
-  const SCHEMA_VERSION = 2;
+  const SCHEMA_VERSION = 3;
+  const SYSTEM_ID = 'gemma_core_memory';
+  const MAX_SUB = 60;
+  const DEFAULT_RECALL_SCORE = 0.5;
   const IDENTITY_KEYS = new Set(['name', 'age', 'birthday', 'location', 'hometown', 'timezone']);
-  const MAX_LOGS = 100;
-  const MAX_EPISODIC = 20;
-  const MAX_SEMANTIC = 200;
+
+  const DEFAULT_CATEGORIES = {
+    general_info: {
+      title: 'General User Info',
+      description:
+        'Standing profile + interaction rules: name, language, location, work, speech/humor prefs. Always on for June.',
+    },
+    interests: {
+      title: 'Broad Interests',
+      description: 'General hobbies, skills, and recurring topics.',
+    },
+    media: {
+      title: 'Media & Culture',
+      description: 'Songs, artists, shows, games, books, creators they mention — specific titles welcome.',
+    },
+    work_life: {
+      title: 'Work & Daily Life',
+      description: 'Job, school, projects, routines, and life logistics that are not one-off throwaways.',
+    },
+    topic_deep_dives: {
+      title: 'Highly Specific Fixations',
+      description: 'Dedicated nodes for topics the user is highly invested in.',
+    },
+  };
+
+  const CATEGORY_RECALL_DEFAULTS = {
+    general_info: 0.9,
+    interests: 0.55,
+    media: 0.4,
+    work_life: 0.55,
+    topic_deep_dives: 0.75,
+  };
 
   function generateId() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -14,125 +46,147 @@
     return new Date().toISOString();
   }
 
-  function memoryTimeMs(value) {
-    if (value == null) return 0;
-    if (typeof value === 'number') return value;
-    const ms = Date.parse(value);
-    return Number.isNaN(ms) ? 0 : ms;
+  function normalizeRecallScore(value, fallback = DEFAULT_RECALL_SCORE) {
+    const base = Number.isFinite(Number(fallback)) ? Number(fallback) : DEFAULT_RECALL_SCORE;
+    const n = Number(value);
+    const score = Number.isFinite(n) ? n : base;
+    return Math.round(Math.max(0, Math.min(1, score)) * 100) / 100;
   }
 
-  function toMemoryDate(value) {
-    if (value == null) return null;
-    if (typeof value === 'string' && !/^\d+$/.test(value)) {
-      const ms = Date.parse(value);
-      return Number.isNaN(ms) ? memoryNow() : new Date(ms).toISOString();
-    }
-    const n = typeof value === 'number' ? value : Number(value);
-    if (!Number.isFinite(n) || n <= 0) return memoryNow();
-    return new Date(n).toISOString();
+  function defaultRecallScoreForCategory(categoryKey) {
+    return CATEGORY_RECALL_DEFAULTS[categoryKey] ?? DEFAULT_RECALL_SCORE;
   }
 
-  function migrateMemoryDates(memory) {
-    if (!memory?.meta) return memory;
-    for (const field of ['createdAt', 'lastSessionAt', 'previousSessionAt', 'consolidatedAt']) {
-      if (memory.meta[field] != null) memory.meta[field] = toMemoryDate(memory.meta[field]);
-    }
-    for (const sem of memory.semantic || []) {
-      for (const field of ['createdAt', 'updatedAt', 'lastAccessedAt']) {
-        if (sem[field] != null) sem[field] = toMemoryDate(sem[field]);
-      }
-    }
-    for (const ep of memory.episodic || []) {
-      if (ep.createdAt != null) ep.createdAt = toMemoryDate(ep.createdAt);
-    }
-    for (const log of memory.logs || []) {
-      if (log.ts != null) log.ts = toMemoryDate(log.ts);
-    }
-    return memory;
-  }
-
-  function inferCategory(key, value) {
-    const k = (key || '').toLowerCase();
-    const v = (value || '').toLowerCase();
-    if (/favorite|love|hate|like|dislike|prefer/.test(k)) return 'preference';
-    if (/friend|family|mom|dad|brother|sister|partner|girlfriend|boyfriend|wife|husband/.test(k)) return 'relationship';
-    if (/think|believe|opinion|feel about/.test(k)) return 'opinion';
-    if (/hobby|interest|into|watch|play|listen/.test(k)) return 'interest';
-    if (/always|usually|every|routine|habit/.test(k)) return 'habit';
-    return 'fact';
+  function slugify(raw) {
+    return String(raw || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48) || 'misc';
   }
 
   function createEmptyMemory() {
+    const categories = {};
+    for (const [key, meta] of Object.entries(DEFAULT_CATEGORIES)) {
+      categories[key] = { title: meta.title, description: meta.description, sub_memories: [] };
+    }
     return {
+      system_id: SYSTEM_ID,
       version: SCHEMA_VERSION,
-      identity: {},
-      semantic: [],
-      episodic: [],
-      logs: [],
+      last_updated: memoryNow(),
+      categories,
       meta: {
         createdAt: memoryNow(),
         lastSessionAt: null,
         previousSessionAt: null,
         totalSessions: 0,
         consolidatedAt: null,
-        currentSessionId: null
-      }
+        currentSessionId: null,
+      },
     };
   }
 
-  function migrateV1toV2(oldMemory) {
-    const mem = createEmptyMemory();
-    const lt = oldMemory.longTerm || {};
-    const logs = oldMemory.logs || [];
-
-    for (const [key, value] of Object.entries(lt)) {
-      if (IDENTITY_KEYS.has(key.toLowerCase())) {
-        mem.identity[key] = value;
-      } else {
-        mem.semantic.push({
-          id: generateId(),
-          category: inferCategory(key, value),
-          subject: key,
-          value: String(value),
-          confidence: 0.8,
-          source: 'migrated',
-          createdAt: memoryNow(),
-          updatedAt: memoryNow(),
-          accessCount: 1,
-          lastAccessedAt: memoryNow()
-        });
-      }
+  function upsertSub(memory, catKey, { title, content, timestamp, recallScore }) {
+    const key = slugify(catKey);
+    if (!memory.categories[key]) {
+      const def = DEFAULT_CATEGORIES[key];
+      memory.categories[key] = {
+        title: def?.title || key.replace(/_/g, ' '),
+        description: def?.description || '',
+        sub_memories: [],
+      };
     }
+    const cat = memory.categories[key];
+    const want = String(title || '').trim().toLowerCase();
+    const existing = cat.sub_memories.find((s) => String(s.title).trim().toLowerCase() === want);
+    if (existing) {
+      existing.content = content;
+      existing.timestamp = timestamp || memoryNow();
+      existing.recallScore = normalizeRecallScore(
+        recallScore,
+        existing.recallScore ?? defaultRecallScoreForCategory(key),
+      );
+      return existing;
+    }
+    const entry = {
+      id: generateId(),
+      title: String(title || 'Untitled').trim(),
+      timestamp: timestamp || memoryNow(),
+      recallScore: normalizeRecallScore(recallScore, defaultRecallScoreForCategory(key)),
+      content: content ?? '',
+    };
+    cat.sub_memories.push(entry);
+    if (cat.sub_memories.length > MAX_SUB) {
+      cat.sub_memories.sort((a, b) => Date.parse(b.timestamp || 0) - Date.parse(a.timestamp || 0));
+      cat.sub_memories = cat.sub_memories.slice(0, MAX_SUB);
+    }
+    return entry;
+  }
 
-    for (const log of logs) {
-      mem.logs.push({
-        id: generateId(),
-        subject: log.subject || '',
-        value: log.value || '',
-        ts: toMemoryDate(log.ts) || memoryNow(),
-        importance: 0.5,
-        sessionId: null
+  function migrateV2toV3(old) {
+    const mem = createEmptyMemory();
+    const identity = old.identity || {};
+    if (Object.keys(identity).length) {
+      upsertSub(mem, 'general_info', { title: 'Basic Demographics', content: { ...identity } });
+    }
+    for (const sem of old.semantic || []) {
+      const cat = sem.category === 'interest' || sem.category === 'preference'
+        ? 'interests'
+        : IDENTITY_KEYS.has(String(sem.subject || '').toLowerCase())
+          ? 'general_info'
+          : 'interests';
+      upsertSub(mem, cat, { title: sem.subject || 'Untitled', content: sem.value || '' });
+    }
+    for (const ep of old.episodic || []) {
+      upsertSub(mem, 'topic_deep_dives', {
+        title: (ep.topics && ep.topics[0]) || 'Past session',
+        content: { focus: ep.summary || 'Previous conversation', topics: ep.topics || [] },
       });
     }
+    if (old.meta) {
+      mem.meta = { ...mem.meta, ...old.meta, totalSessions: old.meta.totalSessions || 0 };
+    }
+    return mem;
+  }
 
+  function migrateV1toV3(old) {
+    const mem = createEmptyMemory();
+    const lt = old.longTerm || {};
+    const demos = {};
+    for (const [key, value] of Object.entries(lt)) {
+      if (IDENTITY_KEYS.has(key.toLowerCase())) demos[key] = value;
+      else upsertSub(mem, 'interests', { title: key, content: String(value) });
+    }
+    if (Object.keys(demos).length) {
+      upsertSub(mem, 'general_info', { title: 'Basic Demographics', content: demos });
+    }
     mem.meta.totalSessions = 1;
     return mem;
   }
 
   function normalize(memory) {
     if (!memory) return createEmptyMemory();
-    
+
     if (!memory.version || memory.version < SCHEMA_VERSION) {
-      if (memory.longTerm || memory.logs) {
-        return migrateMemoryDates(migrateV1toV2(memory));
-      }
-      return createEmptyMemory();
+      if (memory.identity || memory.semantic || memory.episodic || memory.logs) return migrateV2toV3(memory);
+      if (memory.longTerm) return migrateV1toV3(memory);
+      if (!memory.categories) return createEmptyMemory();
     }
 
-    if (!memory.identity) memory.identity = {};
-    if (!Array.isArray(memory.semantic)) memory.semantic = [];
-    if (!Array.isArray(memory.episodic)) memory.episodic = [];
-    if (!Array.isArray(memory.logs)) memory.logs = [];
+    if (!memory.categories || typeof memory.categories !== 'object') memory.categories = {};
+    for (const [key, meta] of Object.entries(DEFAULT_CATEGORIES)) {
+      if (!memory.categories[key]) {
+        memory.categories[key] = { title: meta.title, description: meta.description, sub_memories: [] };
+      } else if (!Array.isArray(memory.categories[key].sub_memories)) {
+        memory.categories[key].sub_memories = [];
+      }
+    }
+    for (const [key, cat] of Object.entries(memory.categories)) {
+      if (!cat || typeof cat !== 'object') continue;
+      if (!Array.isArray(cat.sub_memories)) cat.sub_memories = [];
+      for (const sub of cat.sub_memories) {
+        sub.recallScore = normalizeRecallScore(
+          sub.recallScore,
+          defaultRecallScoreForCategory(key),
+        );
+      }
+    }
     if (!memory.meta) {
       memory.meta = {
         createdAt: memoryNow(),
@@ -140,33 +194,28 @@
         previousSessionAt: null,
         totalSessions: 0,
         consolidatedAt: null,
-        currentSessionId: null
+        currentSessionId: null,
       };
     }
-    return migrateMemoryDates(memory);
+    memory.system_id = memory.system_id || SYSTEM_ID;
+    memory.version = SCHEMA_VERSION;
+    memory.last_updated = memory.last_updated || memoryNow();
+    return memory;
   }
 
-  function trimMemory(memory) {
-    if (memory.logs.length > MAX_LOGS) {
-      memory.logs = memory.logs
-        .sort((a, b) => (b.importance || 0.5) - (a.importance || 0.5) || memoryTimeMs(b.ts) - memoryTimeMs(a.ts))
-        .slice(0, MAX_LOGS);
+  function needsPersistAfterNormalize(memory) {
+    if (!memory || memory.version !== SCHEMA_VERSION || !memory.categories) return true;
+    for (const cat of Object.values(memory.categories || {})) {
+      for (const sub of cat?.sub_memories || []) {
+        if (typeof sub.recallScore !== 'number') return true;
+      }
     }
-    if (memory.episodic.length > MAX_EPISODIC) {
-      memory.episodic = memory.episodic
-        .sort((a, b) => memoryTimeMs(b.createdAt) - memoryTimeMs(a.createdAt))
-        .slice(0, MAX_EPISODIC);
-    }
-    if (memory.semantic.length > MAX_SEMANTIC) {
-      memory.semantic = memory.semantic
-        .sort((a, b) => {
-          const scoreA = (a.accessCount || 0) * 0.3 + (a.confidence || 0.5) * 0.7;
-          const scoreB = (b.accessCount || 0) * 0.3 + (b.confidence || 0.5) * 0.7;
-          return scoreB - scoreA;
-        })
-        .slice(0, MAX_SEMANTIC);
-    }
-    return memory;
+    return false;
+  }
+
+  function writeNormalized(normalized) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
   }
 
   function load() {
@@ -174,20 +223,28 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        return normalize(parsed);
+        const shouldPersist = needsPersistAfterNormalize(parsed);
+        const normalized = normalize(parsed);
+        if (shouldPersist) writeNormalized(normalized);
+        return normalized;
       }
     } catch (e) {
       console.warn('[JuneMemory] Failed to load memory:', e);
     }
-    return createEmptyMemory();
+    const empty = createEmptyMemory();
+    try {
+      return writeNormalized(empty);
+    } catch (e) {
+      console.warn('[JuneMemory] Failed to initialize memory storage:', e);
+      return empty;
+    }
   }
 
   function save(memory) {
     try {
       const normalized = normalize(memory);
-      const trimmed = trimMemory(normalized);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
-      return trimmed;
+      normalized.last_updated = memoryNow();
+      return writeNormalized(normalized);
     } catch (e) {
       console.warn('[JuneMemory] Failed to save memory:', e);
       return memory;
@@ -195,8 +252,7 @@
   }
 
   function applyFromServer(memory) {
-    const normalized = normalize(memory);
-    return save(normalized);
+    return save(normalize(memory));
   }
 
   function startSession() {
@@ -211,114 +267,28 @@
   }
 
   function getSessionId() {
-    const memory = load();
-    return memory.meta?.currentSessionId || null;
+    return load().meta?.currentSessionId || null;
   }
 
-  function clearTier(tier) {
-    const memory = load();
-    if (tier === 'identity') memory.identity = {};
-    else if (tier === 'semantic') memory.semantic = [];
-    else if (tier === 'episodic') memory.episodic = [];
-    else if (tier === 'logs') memory.logs = [];
-    else if (tier === 'all') {
-      return save(createEmptyMemory());
-    }
-    return save(memory);
+  function clearAll() {
+    return save(createEmptyMemory());
   }
 
   function getStorageStats() {
     const memory = load();
     const raw = localStorage.getItem(STORAGE_KEY) || '';
+    const cats = Object.entries(memory.categories || {}).map(([key, cat]) => ({
+      key,
+      count: (cat.sub_memories || []).length,
+    }));
     return {
       version: memory.version,
       byteSize: new Blob([raw]).size,
-      identityCount: Object.keys(memory.identity).length,
-      semanticCount: memory.semantic.length,
-      episodicCount: memory.episodic.length,
-      logsCount: memory.logs.length,
+      categories: cats,
+      totalSubMemories: cats.reduce((n, c) => n + c.count, 0),
       totalSessions: memory.meta?.totalSessions || 0,
       lastSessionAt: memory.meta?.lastSessionAt,
-      consolidatedAt: memory.meta?.consolidatedAt
     };
-  }
-
-  function addSemanticEntry(entry) {
-    const memory = load();
-    const existing = memory.semantic.find(
-      s => s.subject.toLowerCase() === (entry.subject || '').toLowerCase()
-    );
-    if (existing) {
-      existing.value = entry.value;
-      existing.updatedAt = memoryNow();
-      existing.accessCount = (existing.accessCount || 0) + 1;
-      existing.confidence = Math.max(existing.confidence || 0.5, entry.confidence || 0.5);
-      if (entry.category) existing.category = entry.category;
-    } else {
-      memory.semantic.push({
-        id: generateId(),
-        category: entry.category || inferCategory(entry.subject, entry.value),
-        subject: entry.subject,
-        value: entry.value,
-        confidence: entry.confidence || 0.7,
-        source: entry.source || 'explicit',
-        createdAt: memoryNow(),
-        updatedAt: memoryNow(),
-        accessCount: 1,
-        lastAccessedAt: memoryNow()
-      });
-    }
-    return save(memory);
-  }
-
-  function addLog(log) {
-    const memory = load();
-    const isDuplicate = memory.logs.some(
-      l => l.subject === log.subject && l.value === log.value
-    );
-    if (!isDuplicate) {
-      memory.logs.push({
-        id: generateId(),
-        subject: log.subject,
-        value: log.value,
-        ts: toMemoryDate(log.ts) || memoryNow(),
-        importance: log.importance || 0.5,
-        sessionId: memory.meta?.currentSessionId || null
-      });
-    }
-    return save(memory);
-  }
-
-  function setIdentity(key, value) {
-    const memory = load();
-    memory.identity[key] = value;
-    return save(memory);
-  }
-
-  function addEpisodicSummary(summary) {
-    const memory = load();
-    memory.episodic.unshift({
-      id: generateId(),
-      summary: summary.summary,
-      topics: summary.topics || [],
-      mood: summary.mood || 'neutral',
-      createdAt: memoryNow(),
-      turnCount: summary.turnCount || 0
-    });
-    memory.meta.consolidatedAt = memoryNow();
-    return save(memory);
-  }
-
-  function markAccessedEntries(ids) {
-    const memory = load();
-    const now = memoryNow();
-    for (const sem of memory.semantic) {
-      if (ids.includes(sem.id)) {
-        sem.accessCount = (sem.accessCount || 0) + 1;
-        sem.lastAccessedAt = now;
-      }
-    }
-    return save(memory);
   }
 
   window.JuneMemory = {
@@ -327,18 +297,10 @@
     applyFromServer,
     startSession,
     getSessionId,
-    clearTier,
+    clearAll,
+    clearTier: clearAll,
     getStorageStats,
-    addSemanticEntry,
-    addLog,
-    setIdentity,
-    addEpisodicSummary,
-    markAccessedEntries,
     generateId,
-    inferCategory,
     SCHEMA_VERSION,
-    MAX_LOGS,
-    MAX_EPISODIC,
-    MAX_SEMANTIC
   };
 })();
