@@ -3,4 +3,7 @@ node_modules/
 dist/
 *.log
 .env
+.gmail-tokens.json
+.gmail*.json
 node_modules/
+.cursor/

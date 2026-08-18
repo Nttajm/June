@@ -36,12 +36,13 @@
     </aside>
     <div class="chat-sidebar-backdrop" id="chatSidebarBackdrop"></div>
 
-    <main class="card">
+    <main class="card" id="appCard">
         <section class="chat">
             <div class="chat-log" id="chatLog"></div>
             <div class="chat-status" id="chatStatus">
                 <div class="spinner" id="spinner"></div>
                 <span class="status-text" id="statusText"></span>
+                <div class="agent-activity-list" id="agentActivityList" hidden></div>
             </div>
             <div class="interim" id="interim"></div>
             <div class="type-bar">
@@ -56,6 +57,28 @@
             </div>
         </section>
         <section class="voice">
+            <div class="app-stack" id="appStack" hidden aria-hidden="true">
+                <div class="app-stack-dock" id="appStackDock"></div>
+                <div class="app-stack-label" id="appStackLabel"></div>
+                <div class="app-stack-nav" id="appStackNav" hidden>
+                    <button type="button" class="app-stack-nav-btn" id="appStackPrev" aria-label="Browse apps up">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M6 14l6-6 6 6"/>
+                        </svg>
+                    </button>
+                    <button type="button" class="app-stack-nav-all" id="appStackAll" aria-label="See all apps" aria-pressed="false">All</button>
+                    <button type="button" class="app-stack-nav-btn" id="appStackNext" aria-label="Browse apps down">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M6 10l6 6 6-6"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="app-stack-window" id="appStackWindow">
+                    <div class="app-stack-frame" id="appStackFrame"></div>
+                </div>
+                <div class="app-stack-pane" id="appStackPane" hidden></div>
+            </div>
+            <span class="brainstorm-status" id="brainstormStatus" hidden>Brainstorm</span>
             <span class="pause-status">Paused</span>
             <div class="orb">
                 <span class="pause-icon" aria-hidden="true"></span>
@@ -71,7 +94,7 @@
         </section>
     </main>
 
-    <p class="hints">always on · hang on / shush to pause · orb or <kbd>m</kbd> to resume · say go to sleep to end · <kbd>Ctrl+Shift+G</kbd> agents</p>
+    <p class="hints">always on · say enter brainstorm mode / exit brainstorm mode · hang on / shush to pause · orb or <kbd>m</kbd> to resume · say go to sleep to end · <kbd>Ctrl+Shift+G</kbd> agents</p>
 
     <div class="settings-overlay" id="settingsOverlay">
         <div class="settings-modal">
@@ -93,6 +116,11 @@
                         <option value="eleven_v3">Eleven v3 (expressive)</option>
                     </select>
                 </label>
+                <div class="settings-label" id="gmailSettingsRow">
+                    <span>Gmail</span>
+                    <span class="settings-hint" id="gmailStatusHint">Not connected</span>
+                    <a class="settings-link" id="gmailConnectLink" href="/api/gmail/auth" target="_blank" rel="noopener">Connect Gmail</a>
+                </div>
             </div>
         </div>
     </div>
@@ -113,6 +141,7 @@
                         <option value="snapshot">snapshot</option>
                         <option value="memory">memory</option>
                         <option value="followup">followup</option>
+                        <option value="artifacts">artifacts</option>
                     </select>
                 </label>
                 <label class="agent-inspector-stalls">
@@ -124,14 +153,29 @@
                 <button type="button" class="agent-inspector-btn agent-inspector-btn--close" id="agentInspectorClose" aria-label="Close">&times;</button>
             </div>
         </div>
+        <div class="agent-inspector-cost" id="agentInspectorCost" title="Cumulative token usage, prompt-cache hits, TTFT, and estimated USD for this voice session">
+            <div class="ai-cost-main">
+                <span class="ai-cost-label">Session total</span>
+                <span class="ai-cost-usd" id="agentInspectorCostUsd">$0.000000</span>
+                <span class="ai-cost-tokens" id="agentInspectorCostTokens">0 tok · 0 calls</span>
+            </div>
+            <div class="ai-cost-cache" id="agentInspectorCostCache">cache — · TTFT —</div>
+            <div class="ai-cost-breakdown" id="agentInspectorCostBreakdown"></div>
+            <div class="ai-cost-source" id="agentInspectorCostSource">Session cumulative · rates follow active models (gpt-4o-mini $0.15/$0.60 · gpt-4.1 $2/$8)</div>
+        </div>
         <div class="agent-inspector-timeline" id="agentInspectorTimeline"></div>
         <p class="agent-inspector-hint">Ctrl/Cmd+Shift+G to toggle · click a row for full detail · Copy all pastes JSON for debugging</p>
     </div>
 
+    <div class="youtube-player-mount" id="youtubePlayerMount" aria-hidden="true"></div>
+
     <script src="js/index.js"></script>
     <script src="js/memory.js"></script>
+    <script src="js/artifacts.js"></script>
     <script src="js/chat-history.js"></script>
     <script src="js/agent-inspector.js"></script>
+    <script src="js/youtube-player.js"></script>
+    <script src="js/app-stack.js"></script>
     <script src="js/voice-client.js"></script>
 </body>
 </html>

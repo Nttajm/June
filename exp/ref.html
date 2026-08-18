@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Color Palette Showcase</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body{
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            justify-items: center;
+            background: #000;
+        }
+
+        .card-container{
+            position: relative;
+            width: 0px;
+            height: 300px;
+            perspective: 1000px;
+            perspective-origin: 50% -229%;
+            cursor: pointer;
+            padding-bottom: 100px;
+        }
+
+        .card{
+            height: 300px;
+            width: 300px;
+            border-radius: 20px;
+            overflow: hidden;
+            border-top: 5px solid rgba(0,0,0,0.3);
+            border-left: 5px solid rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            align-items: flex-end;
+            padding: 25px;
+            position: relative;
+            outline: 1px solid rgba(0, 0, 0, 0.361);
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.2);
+            pointer-events: none;
+        }
+
+        .color-name {
+            color: #fff;
+            font-size: 18px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            position: relative;
+            z-index: 1;
+            margin-bottom: 8px;
+            text-align: right;
+        }
+
+        .color-hex {
+            color: #fff;
+            font-size: 14px;
+            font-weight: 500;
+            position: relative;
+            z-index: 1;
+            letter-spacing: 0.5px;
+            text-align: right;
+        }
+
+        .container{
+            display: flex;
+            gap: 30px;
+            transform: translateX(-100px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script>
+        const container = document.querySelector('.container');
+        const cards = [];
+        const colorPalette = [
+    // ===== YELLOW SHADES =====
+    { hex: '#FFD700', name: 'Gold' },
+    { hex: '#FFFF00', name: 'Yellow' },
+    { hex: '#FFF44F', name: 'Lemon Yellow' },
+    { hex: '#FFEA00', name: 'Bright Yellow' },
+    { hex: '#E4D00A', name: 'Citrine Yellow' },
+    { hex: '#FFDF00', name: 'Golden Yellow' },
+    { hex: '#FADA5E', name: 'Royal Yellow' },
+    { hex: '#E1AD01', name: 'Honey Yellow' },
+    { hex: '#FFC300', name: 'Mustard Yellow' },
+    { hex: '#FFCC33', name: 'Sunshine Yellow' },       
+    // ===== RED SHADES =====
+    { hex: '#880808', name: 'Blood Red' },
+    { hex: '#DC143C', name: 'Crimson Red' },
+    { hex: '#8B0000', name: 'Dark Red' },
+    { hex: '#800020', name: 'Burgundy' },
+    { hex: '#FF2400', name: 'Scarlet' },
+    { hex: '#CC0000', name: 'Fire Engine Red' },
+    { hex: '#E0115F', name: 'Ruby Red' },
+    { hex: '#800000', name: 'Maroon' },
+    { hex: '#AA4A44', name: 'Brick Red' },
+    { hex: '#FF6347', name: 'Tomato Red' },
+    { hex: '#FF3131', name: 'Neon Red' },
+    { hex: '#D2042D', name: 'Cherry Red' },
+    { hex: '#722F37', name: 'Wine Red' },
+    { hex: '#ED2939', name: 'Imperial Red' },
+    { hex: '#FF4040', name: 'Coral Red' },
+
+    // ===== ORANGE SHADES =====
+    { hex: '#FF7F00', name: 'Orange' },
+    { hex: '#FFA500', name: 'Pure Orange' },
+    { hex: '#FF8C00', name: 'Dark Orange' },
+    { hex: '#FF4500', name: 'Orange Red' },
+    { hex: '#FFB347', name: 'Pastel Orange' },
+    { hex: '#FF5E0E', name: 'Vivid Orange' },
+    { hex: '#E25822', name: 'Flame Orange' },
+    { hex: '#FF9F00', name: 'Amber Orange' },
+    { hex: '#D2691E', name: 'Chocolate Orange' },
+    { hex: '#F28500', name: 'Tangerine' },
+
+
+    // ===== GREEN SHADES =====
+    { hex: '#00FF00', name: 'Lime Green' },
+    { hex: '#32CD32', name: 'Leaf Green' },
+    { hex: '#228B22', name: 'Forest Green' },
+    { hex: '#006400', name: 'Dark Green' },
+    { hex: '#2E8B57', name: 'Sea Green' },
+    { hex: '#66CDAA', name: 'Medium Aquamarine' },
+    { hex: '#7FFF00', name: 'Chartreuse' },
+    { hex: '#00FA9A', name: 'Medium Spring Green' },
+    { hex: '#00FF7F', name: 'Spring Green' },
+    { hex: '#98FB98', name: 'Pale Green' },
+
+    // ===== BLUE SHADES =====
+    { hex: '#0000FF', name: 'Blue' },
+    { hex: '#0000CD', name: 'Medium Blue' },
+    { hex: '#4169E1', name: 'Royal Blue' },
+    { hex: '#1E90FF', name: 'Dodger Blue' },
+    { hex: '#4682B4', name: 'Steel Blue' },
+    { hex: '#5F9EA0', name: 'Cadet Blue' },
+    { hex: '#00BFFF', name: 'Deep Sky Blue' },
+    { hex: '#87CEEB', name: 'Sky Blue' },
+    { hex: '#6495ED', name: 'Cornflower Blue' },
+    { hex: '#7DF9FF', name: 'Electric Blue' },
+    { hex: '#191970', name: 'Midnight Blue' },
+    { hex: '#003366', name: 'Dark Navy' },
+
+    // ===== PURPLE / VIOLET SHADES =====
+    { hex: '#800080', name: 'Purple' },
+    { hex: '#8A2BE2', name: 'Blue Violet' },
+    { hex: '#9370DB', name: 'Medium Purple' },
+    { hex: '#DA70D6', name: 'Orchid' },
+    { hex: '#BA55D3', name: 'Medium Orchid' },
+    { hex: '#9400D3', name: 'Dark Violet' },
+    { hex: '#9932CC', name: 'Dark Orchid' },
+    { hex: '#D8BFD8', name: 'Thistle' },
+    { hex: '#E6E6FA', name: 'Lavender' },
+    { hex: '#4B0082', name: 'Indigo' },
+
+    // ===== PINK SHADES =====
+    { hex: '#FFC0CB', name: 'Pink' },
+    { hex: '#FF69B4', name: 'Hot Pink' },
+    { hex: '#FF1493', name: 'Deep Pink' },
+    { hex: '#DB7093', name: 'Pale Violet Red' },
+    { hex: '#FFB6C1', name: 'Light Pink' },
+    { hex: '#C71585', name: 'Medium Violet Red' },
+    { hex: '#F08080', name: 'Light Coral' },
+    { hex: '#E75480', name: 'Dark Pink' },
+    { hex: '#FF007F', name: 'Bright Pink' },
+    { hex: '#FC0FC0', name: 'Neon Pink' },
+
+    // ===== BROWN SHADES =====
+    { hex: '#A52A2A', name: 'Brown' },
+    { hex: '#8B4513', name: 'Saddle Brown' },
+    { hex: '#D2691E', name: 'Chocolate' },
+    { hex: '#CD853F', name: 'Peru' },
+    { hex: '#F4A460', name: 'Sandy Brown' },
+    { hex: '#DEB887', name: 'Burly Wood' },
+    { hex: '#C19A6B', name: 'Camel' },
+    { hex: '#704214', name: 'Sepia' },
+    { hex: '#8B0000', name: 'Rust Brown' },
+    { hex: '#FFE4C4', name: 'Bisque' },
+
+    // ===== GREY / BLACK / WHITE =====
+    { hex: '#000000', name: 'Black' },
+    { hex: '#1C1C1C', name: 'Very Dark Grey' },
+    { hex: '#2F4F4F', name: 'Dark Slate Grey' },
+    { hex: '#696969', name: 'Dim Grey' },
+    { hex: '#808080', name: 'Grey' },
+    { hex: '#A9A9A9', name: 'Dark Grey' },
+    { hex: '#C0C0C0', name: 'Silver' },
+    { hex: '#D3D3D3', name: 'Light Grey' },
+    { hex: '#F5F5F5', name: 'White Smoke' },
+    { hex: '#FFFFFF', name: 'White' },
+];
+
+        const cardCount = colorPalette.length;
+
+        const getTransform = (index, yOffset = 0) => 
+            `rotateY(25deg) translateY(${index * 10 + yOffset}px) translateZ(${index * 0.5}px) skewY(-1deg)`;
+
+        const animateCards = (index, yOffsets, ease = "power2.out") => {
+            const positions = [index - 1, index, index + 1];
+            positions.forEach((pos, i) => {
+                if (cards[pos]) {
+                    gsap.to(cards[pos], {
+                        duration: 0.3,
+                        ease: ease,
+                        transform: getTransform(pos, yOffsets[i])
+                    });
+                }
+            });
+        };
+
+        for (let i = 0; i < cardCount; i++) {
+            const cardContainer = document.createElement('div');
+            cardContainer.className = 'card-container';
+            
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style.transform = getTransform(i);
+            card.style.background = colorPalette[i].hex;
+            
+            const colorName = document.createElement('div');
+            colorName.className = 'color-name';
+            colorName.textContent = colorPalette[i].name;
+            
+            const colorHex = document.createElement('div');
+            colorHex.className = 'color-hex';
+            colorHex.textContent = colorPalette[i].hex.toUpperCase();
+            
+            card.appendChild(colorName);
+            card.appendChild(colorHex);
+            
+            cardContainer.appendChild(card);
+            container.appendChild(cardContainer);
+            cards.push(card);
+
+            cardContainer.addEventListener('mouseenter', () => 
+                animateCards(i, [-80, -150, -80])
+            );
+            
+            cardContainer.addEventListener('mouseleave', () => 
+                animateCards(i, [0, 0, 0], "back.out(1.5)")
+            );
+        }
+    </script>
+</body>
+</html>

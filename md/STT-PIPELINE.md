@@ -9,7 +9,7 @@ See also: [`PIPELINE.md`](./PIPELINE.md) for the full voice loop.
 
 ## Summary
 
-June uses **Deepgram Flux** (`flux-general-en`) on the **`/v2/listen`** WebSocket endpoint.
+June uses **Deepgram Flux** (`flux-general-multi` by default) on the **`/v2/listen`** WebSocket endpoint.
 Flux replaces a separate VAD + endpointing stack: it emits conversation-native turn events
 (`StartOfTurn`, `Update`, `EagerEndOfTurn`, `TurnResumed`, `EndOfTurn`) that drive when
 the agent listens, thinks, and responds.
@@ -45,7 +45,7 @@ chunked at **~80 ms**, and streamed to the Node server, which forwards raw bytes
 │  handleAudio(chunk) → FluxStream.sendAudio(chunk)                           │
 │       │                                                                     │
 │       ▼                                                                     │
-│  wss://api.deepgram.com/v2/listen?model=flux-general-en&...                 │
+│  wss://api.deepgram.com/v2/listen?model=flux-general-multi&...              │
 │       │                                                                     │
 │       ▼                                                                     │
 │  TurnInfo JSON events → #onTurn() → transcript + state updates to client    │
@@ -178,7 +178,7 @@ Partial transcripts render in `#interim`; finals clear interim and append a chat
 
 ```
 wss://api.deepgram.com/v2/listen
-  ?model=flux-general-en
+  ?model=flux-general-multi
   &encoding=linear16
   &sample_rate=16000
   &eager_eot_threshold=0.5
@@ -194,9 +194,24 @@ Authorization: Token <DEEPGRAM_API_KEY>
 
 **Important:** Flux requires **`/v2/listen`**. `/v1/listen` will not work.
 
+### Language detect-then-lock (`flux-general-multi`)
+
+1. Connect with no hints (or optional `STT_LANGUAGE_HINTS`) so Flux auto-detects.
+2. Each `EndOfTurn` includes `languages` (primary first by word count).
+3. After `STT_LANGUAGE_LOCK_AFTER` consecutive finals in the same primary language, send:
+
+```json
+{ "type": "Configure", "language_hints": ["es"] }
+```
+
+4. If the user sustains a different language for the same streak, re-lock to the new code.
+
+This keeps accuracy high when the conversation stays in one language, while still allowing a real switch.
+
 Docs: [Flux quickstart](https://developers.deepgram.com/docs/flux/quickstart),
 [EOT parameters](https://developers.deepgram.com/docs/flux/configuration),
-[Eager EOT guide](https://developers.deepgram.com/docs/flux/voice-agent-eager-eot)
+[Eager EOT guide](https://developers.deepgram.com/docs/flux/voice-agent-eager-eot),
+[Language prompting](https://developers.deepgram.com/docs/flux/language-prompting)
 
 ### Audio format
 
@@ -343,6 +358,9 @@ From `.env` / `lib/states.js`:
 | Variable | Default | STT role |
 | --- | --- | --- |
 | `DEEPGRAM_API_KEY` | — | **Required** for STT |
+| `STT_MODEL` | `flux-general-multi` | `flux-general-multi` (10 langs, auto-detect + lock) or `flux-general-en` (English only) |
+| `STT_LANGUAGE_HINTS` | _(empty)_ | Optional seed hints for multi, e.g. `en,es`. Empty = pure auto-detect at connect |
+| `STT_LANGUAGE_LOCK_AFTER` | `2` | Consecutive `EndOfTurn` detections in the same language before locking a single-language hint |
 | `STT_SAMPLE_RATE` | `16000` | Must match Deepgram `sample_rate` param |
 | `EAGER_EOT_THRESHOLD` | `0.5` | Enables eager speculation; range 0.3–0.9; must be ≤ `EOT_THRESHOLD` |
 | `EOT_THRESHOLD` | `0.7` | Final turn confidence; range 0.5–0.9 |
@@ -417,7 +435,7 @@ Currently logged only indirectly (no dedicated STT error UI).
 
 ```bash
 wscat -H "Authorization: Token $DEEPGRAM_API_KEY" \
-  -c "wss://api.deepgram.com/v2/listen?model=flux-general-en&encoding=linear16&sample_rate=16000"
+  -c "wss://api.deepgram.com/v2/listen?model=flux-general-multi&encoding=linear16&sample_rate=16000"
 # then paste/send binary linear16 audio
 ```
 
@@ -425,7 +443,7 @@ wscat -H "Authorization: Token $DEEPGRAM_API_KEY" \
 
 ## Known limitations
 
-1. **English only** — `flux-general-en`; multilingual would need `flux-general-multi` + `language_hint`.
+1. **Multilingual detect-then-lock** — default `flux-general-multi` supports en, es, fr, de, hi, ru, pt, ja, it, nl. Starts in auto-detect (or `STT_LANGUAGE_HINTS`), then after `STT_LANGUAGE_LOCK_AFTER` consecutive `EndOfTurn`s in the same language sends a Flux `Configure` to lock that hint. Sustained switches re-lock. Set `STT_MODEL=flux-general-en` for English-only.
 2. **No custom AEC** — relies on browser WebRTC + half-duplex gating; no acoustic echo reference from TTS output.
 3. **No barge-in during SPEAKING** — mic is muted while June speaks; by design for echo stability.
 4. **Nearest-neighbor resample** — simple, not polyphase; acceptable at 16 kHz but not audiophile quality.
@@ -444,7 +462,8 @@ getUserMedia echoCancellation / noiseSuppression / autoGainControl
 
 // lib/sttFlux.js
 FLUX_URL = "wss://api.deepgram.com/v2/listen"
-model = "flux-general-en"
+model = "flux-general-multi"  // STT_MODEL env; flux-general-en for English only
+// After N same-language EndOfTurns → Configure { language_hints: [code] }
 encoding = "linear16"
 
 // lib/session.js

@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stack3D — 3D App Launcher</title>
+<style>
+  :root{
+    --bg-top:#f6cc98;
+    --bg-mid:#e9a86a;
+    --bg-bottom:#c97b46;
+    --ink:#fdf5ea;
+    --ink-dim: rgba(253,245,234,0.55);
+    --ink-faint: rgba(253,245,234,0.28);
+    --accent:#e6542a;
+    --card-bg:#fbf3e8;
+    --card-ink:#3a2a1c;
+    --card-ink-dim: rgba(58,42,28,0.55);
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    height:100%; margin:0;
+    background:
+      radial-gradient(ellipse 900px 500px at 50% 8%, rgba(255,238,214,0.55), transparent 60%),
+      linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 48%, var(--bg-bottom) 100%);
+    overflow:hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  /* ============================================================
+     STACK3D WIDGET
+  ============================================================= */
+  .stack3d-widget{
+    position:fixed; z-index:9999;
+    font-family:inherit;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---------- dock (closed / app-icon cascade) ---------- */
+  .stack3d-dock{
+    position:relative;
+    width:220px; height:220px;
+    perspective:1000px;
+  }
+  .stack3d-dock-icon{
+    position:absolute; left:0; bottom:0;
+    width:48px; height:48px;
+    border:none; background:none;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    transform-origin:bottom left;
+    color:var(--ink);
+    transition: transform .45s cubic-bezier(.22,.61,.36,1),
+                opacity .35s ease,
+                filter .35s ease;
+    will-change: transform, opacity;
+  }
+  .stack3d-dock-icon svg{
+    width:32px; height:32px;
+    stroke:currentColor; fill:none;
+    stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round;
+    filter: drop-shadow(0 6px 3px rgba(30,12,2,0.28));
+  }
+  .stack3d-dock-icon::after{
+    content:"";
+    position:absolute;
+    left:50%; bottom:2px;
+    width:28px; height:9px;
+    transform:translateX(-50%);
+    background:radial-gradient(ellipse at center, rgba(30,12,2,0.42) 0%, rgba(30,12,2,0) 72%);
+    pointer-events:none;
+  }
+  .stack3d-dock-icon.selected::after{
+    width:34px; height:11px;
+    background:radial-gradient(ellipse at center, rgba(30,12,2,0.5) 0%, rgba(30,12,2,0) 72%);
+  }
+
+  .stack3d-label{
+    position:absolute; left:0; bottom:-26px;
+    font-size:12px; font-weight:600; letter-spacing:.03em;
+    color:var(--ink); opacity:.85;
+    white-space:nowrap;
+    transition: opacity .25s ease;
+  }
+
+
+  /* ---------- window (opened app + sub-content cascade) ---------- */
+  .stack3d-window{
+    position:absolute; left:86px; bottom:0;
+    width:560px; height:340px;
+    opacity:0; transform:translateX(-24px) scale(.96);
+    pointer-events:none;
+    transition: opacity .4s ease, transform .4s cubic-bezier(.22,.61,.36,1);
+  }
+  .stack3d-window.open{ opacity:1; transform:translateX(0) scale(1); pointer-events:auto; }
+
+  .stack3d-frame{
+    position:relative;
+    width:100%; height:100%;
+    perspective:1300px;
+  }
+
+  .stack3d-subcard{
+    position:absolute;
+    left:8px; bottom:8px;
+    width:300px; height:196px;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,0.55);
+    background:var(--card-bg);
+    color:var(--card-ink);
+    overflow:hidden;
+    box-shadow:0 22px 44px rgba(30,14,4,0.32);
+    transform-origin:bottom left;
+    transition: transform .45s cubic-bezier(.22,.61,.36,1),
+                opacity .35s ease,
+                filter .35s ease;
+    will-change: transform, opacity;
+  }
+  .stack3d-subcard .sc-header{
+    height:36px; display:flex; align-items:center; gap:9px;
+    padding:0 13px;
+    border-bottom:2px solid var(--card-accent, #d8c8b4);
+  }
+  .stack3d-subcard .sc-badge{
+    width:19px; height:19px; border-radius:6px;
+    background:var(--card-accent, #d8c8b4);
+    color:#fff; font-size:10px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+    flex-shrink:0;
+  }
+  .stack3d-subcard .sc-title{ font-size:13px; font-weight:700; letter-spacing:.01em; }
+  .stack3d-subcard .sc-body{ padding:12px 14px; font-size:12px; line-height:1.55; color:var(--card-ink-dim); }
+  .stack3d-subcard.is-back .sc-body{ display:none; }
+  .stack3d-subcard.is-back .sc-title{ opacity:.5; }
+
+  .stack3d-subcard .sc-rows{ list-style:none; margin:0; padding:0; }
+  .stack3d-subcard .sc-rows li{
+    padding:5px 0; border-bottom:1px solid rgba(58,42,28,0.08);
+    display:flex; align-items:baseline; gap:7px;
+  }
+  .stack3d-subcard .sc-rows li:last-child{ border-bottom:none; }
+  .stack3d-subcard .sc-rows li::before{ content:"·"; color:var(--card-accent,#c9b6a0); font-weight:700; }
+
+  .stack3d-subcard .sc-chat{ display:flex; flex-direction:column; gap:7px; }
+  .stack3d-subcard .sc-bubble{
+    max-width:80%; padding:6px 10px; border-radius:10px; font-size:12px;
+  }
+  .stack3d-subcard .sc-bubble.them{ align-self:flex-start; background:rgba(58,42,28,0.07); border-bottom-left-radius:2px; }
+  .stack3d-subcard .sc-bubble.me{ align-self:flex-end; background:var(--card-accent,#e6542a); color:#fff; border-bottom-right-radius:2px; }
+
+  .stack3d-subcard .sc-weather{ text-align:center; padding-top:8px; }
+  .stack3d-subcard .sc-weather .temp{ font-size:42px; font-weight:200; line-height:1; }
+  .stack3d-subcard .sc-weather .cond{ font-size:12px; opacity:.7; margin-top:4px; }
+  .stack3d-subcard .sc-weather .loc{ font-size:11px; opacity:.5; margin-top:8px; letter-spacing:.05em; }
+
+
+  @media (max-width: 760px){
+    .stack3d-widget{ transform:scale(.72); transform-origin:bottom left; }
+  }
+</style>
+</head>
+<body>
+
+  <div id="widget-root"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============================================================
+     ICONS  (line-art, 24x24, stroke=currentColor)
+  ============================================================= */
+  const ICONS = {
+    google: `<svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.2"/>
+      <ellipse cx="12" cy="12" rx="3.4" ry="8.2"/>
+      <path d="M3.8 12h16.4"/>
+      <path d="M5.1 8h13.8M5.1 16h13.8"/>
+    </svg>`,
+    memory: `<svg viewBox="0 0 24 24">
+      <rect x="7" y="7" width="10" height="10" rx="1.6"/>
+      <rect x="10" y="10" width="4" height="4" rx=".6"/>
+      <path d="M9 4.6v2.4M12 4.6v2.4M15 4.6v2.4"/>
+      <path d="M9 17v2.4M12 17v2.4M15 17v2.4"/>
+      <path d="M4.6 9h2.4M4.6 12h2.4M4.6 15h2.4"/>
+      <path d="M17 9h2.4M17 12h2.4M17 15h2.4"/>
+    </svg>`,
+    weather: `<svg viewBox="0 0 24 24">
+      <circle cx="9.4" cy="8.8" r="2.7"/>
+      <path d="M9.4 4.2v1.2M9.4 12.2v1.2M4.8 8.8H3.6M15.2 8.8h-1.2"/>
+      <path d="M5.7 5.1l.9.9M12.2 12.5l.9.9M12.2 5.1l-.9.9M5.7 12.5l-.9.9"/>
+      <path d="M7.2 18h9.8a3.5 3.5 0 0 0 .4-7 4.6 4.6 0 0 0-8.8-1.3A3.4 3.4 0 0 0 7.2 18Z"/>
+    </svg>`,
+    messages: `<svg viewBox="0 0 24 24">
+      <path d="M4.2 6.2A2.2 2.2 0 0 1 6.4 4h8.4A2.2 2.2 0 0 1 17 6.2v5.4a2.2 2.2 0 0 1-2.2 2.2H8.4L4.8 16.6v-3H6.4A2.2 2.2 0 0 1 4.2 11.4V6.2Z"/>
+      <path d="M17 10.4h.6A2.2 2.2 0 0 1 19.8 12.6v5.4a2.2 2.2 0 0 1-2.2 2.2h-1.4v2.6l-3.4-2.6H9.6"/>
+    </svg>`
+  };
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, s => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    }[s]));
+  }
+
+  function initials(str){
+    return String(str).trim().slice(0,2).toUpperCase();
+  }
+
+  /* ============================================================
+     SUB-CONTENT RENDERERS
+  ============================================================= */
+  function renderBody(item){
+    switch(item.type){
+      case "list":
+        return `<ul class="sc-rows">${(item.rows||[]).map(r=>`<li>${escapeHtml(r)}</li>`).join("")}</ul>`;
+      case "chat":
+        return `<div class="sc-chat">${(item.messages||[]).map(m=>
+          `<div class="sc-bubble ${m.from==="me"?"me":"them"}">${escapeHtml(m.text)}</div>`).join("")}</div>`;
+      case "weather":
+        return `<div class="sc-weather">
+                   <div class="temp">${escapeHtml(item.temp||"")}</div>
+                   <div class="cond">${escapeHtml(item.condition||"")}</div>
+                   <div class="loc">${escapeHtml(item.title||"")}</div>
+                 </div>`;
+      case "article":
+      default:
+        return `<div>${(item.lines||[]).map(l=>`<p style="margin:0 0 6px;">${escapeHtml(l)}</p>`).join("")}</div>`;
+    }
+  }
+
+  /* ============================================================
+     DEFAULT APP DATA
+  ============================================================= */
+  const DEFAULT_APPS = [
+    {
+      id:"google", name:"Google", icon:"google", accent:"#e4452a",
+      subItems:[
+        { id:"reddit", title:"Reddit", accent:"#ff5700", type:"list", rows:[
+          "r/programming · 2.3k — best practices thread",
+          "r/webdev · 890 — show off your latest build",
+          "r/technology · 5.1k — breakthrough announced"
+        ]},
+        { id:"wikipedia", title:"Wikipedia", accent:"#8a8a8a", type:"article", lines:[
+          "Search results for your query.",
+          "An overview of the topic, with key",
+          "facts and related links below."
+        ]},
+        { id:"stackoverflow", title:"Stack Overflow", accent:"#f48024", type:"list", rows:[
+          "How do I center a div? · 42 votes",
+          "let vs var, what's the difference? · 128 votes",
+          "Best way to debounce a function? · 17 votes"
+        ]},
+        { id:"facebook", title:"Facebook", accent:"#3b5998", type:"list", rows:[
+          "Friend request from Alex Chen",
+          "3 new notifications",
+          "Memories · 2 years ago today"
+        ]}
+      ]
+    },
+    {
+      id:"memory", name:"Memory", icon:"memory", accent:"#2c241c",
+      subItems:[
+        { id:"music", title:"Music", accent:"#8a5cd6", type:"list", rows:[
+          "Recently played · Lo-fi Focus Mix",
+          "Saved playlist · Road Trip 2024",
+          "Top genre this month · Indie Folk"
+        ]},
+        { id:"food", title:"Food", accent:"#d68a3c", type:"list", rows:[
+          "Saved recipe · Weeknight Pasta",
+          "Favorite · Thai green curry",
+          "Grocery list from last week"
+        ]},
+        { id:"work", title:"Work", accent:"#4f8f6b", type:"list", rows:[
+          "Meeting notes · Q3 planning",
+          "Task · finish project proposal",
+          "Reminder · follow up with team"
+        ]},
+        { id:"location", title:"Location", accent:"#4a7fc9", type:"list", rows:[
+          "Frequent · Downtown Cafe",
+          "Last trip · Lake Tahoe",
+          "Saved place · Home office"
+        ]}
+      ]
+    },
+    {
+      id:"weather", name:"Weather", icon:"weather", accent:"#3b8fd4",
+      subItems:[
+        { id:"current", title:"Santa Rosa, CA", accent:"#4a8fc9", type:"weather",
+          temp:"74°", condition:"Cloudy" }
+      ]
+    },
+    {
+      id:"messages", name:"Messages", icon:"messages", accent:"#7c5cbf",
+      subItems:[
+        { id:"m1", title:"How to do calculus", accent:"#e6542a", type:"chat", messages:[
+          { from:"them", text:"Hey, can you help me understand derivatives?" },
+          { from:"me", text:"Sure — think of it as the rate of change at a point." }
+        ]},
+        { id:"m2", title:"Best morning routine", accent:"#e6542a", type:"chat", messages:[
+          { from:"them", text:"What's your morning routine like?" },
+          { from:"me", text:"Wake up, hydrate, 10 min stretch, then coffee." }
+        ]},
+        { id:"m3", title:"Weekend trip ideas", accent:"#e6542a", type:"chat", messages:[
+          { from:"them", text:"Any ideas for a weekend getaway?" },
+          { from:"me", text:"The coast is beautiful this time of year." }
+        ]},
+        { id:"m4", title:"Dinner recipe help", accent:"#e6542a", type:"chat", messages:[
+          { from:"them", text:"Need a quick dinner idea for tonight" },
+          { from:"me", text:"Stir fry — whatever veggies you've got on hand." }
+        ]}
+      ]
+    }
+  ];
+
+  /* ============================================================
+     GEOMETRY CONSTANTS
+  ============================================================= */
+  const DOCK_STEP = { x: 30, y: -42, z: -130 };
+  const SUB_STEP  = { x: 36, y: -32, z: -120 };
+  const DOCK_COPIES = 2;
+  const DOCK_R_MIN = -2;
+
+  function wrapIndex(v, n){
+    return ((v % n) + n) % n;
+  }
+  function dockRMax(n){
+    return Math.max(n - 2, 1);
+  }
+  function dockOpacity(r, isOpen){
+    if (isOpen) return r === 0 ? 1 : 0;
+    const d = Math.abs(r);
+    if (d === 0) return 1;
+    return Math.max(0.08, 0.52 - (d - 1) * 0.18);
+  }
+  function subOpacity(r){
+    if (r === 0) return 1;
+    return Math.max(0.14, 0.46 - (r - 1) * 0.16);
+  }
+
+  /* ============================================================
+     Stack3D  —  public, embeddable widget class
+     ------------------------------------------------------------
+     new Stack3D(containerEl, {
+       apps,                 // array of app objects (see DEFAULT_APPS)
+       position: {left,bottom,top,right}, // fixed-position offsets
+       theme: {accent, ...}, // optional CSS var overrides
+       keyboard: true        // capture arrow/enter/esc globally
+     }).mount();
+  ============================================================= */
+  class Stack3D {
+    constructor(container, options = {}){
+      if (!container) throw new Error("Stack3D: a container element is required");
+      this.container = container;
+      this.apps = options.apps && options.apps.length ? options.apps : DEFAULT_APPS;
+      this.position = options.position || { left:"48px", bottom:"48px" };
+      this.theme = options.theme || {};
+      this.keyboardEnabled = options.keyboard !== false;
+
+      this.state = { index:0, isOpen:false, subIndex:0 };
+      this._cursor = 0;
+      this._listeners = {};
+      this._appCardCache = new Map(); // appId -> array of subcard DOM els
+      this._dockCopies = []; // { el, appIndex }
+      this._dockLastR = new Map();
+      this._mounted = false;
+
+      this._onKeyDown = this._onKeyDown.bind(this);
+    }
+
+    /* ---------- lifecycle ---------- */
+    mount(){
+      if (this._mounted) return this;
+
+      this.root = document.createElement("div");
+      this.root.className = "stack3d-widget";
+      this._applyPosition();
+      Object.entries(this.theme).forEach(([k,v]) => this.root.style.setProperty(`--${k}`, v));
+
+      // dock
+      this.dockEl = document.createElement("div");
+      this.dockEl.className = "stack3d-dock";
+
+      this._buildDockIcons();
+
+      this.labelEl = document.createElement("div");
+      this.labelEl.className = "stack3d-label";
+      this.dockEl.appendChild(this.labelEl);
+
+      // window
+      this.windowEl = document.createElement("div");
+      this.windowEl.className = "stack3d-window";
+      this.frameEl = document.createElement("div");
+      this.frameEl.className = "stack3d-frame";
+      this.windowEl.appendChild(this.frameEl);
+
+      this.root.appendChild(this.dockEl);
+      this.root.appendChild(this.windowEl);
+      this.container.appendChild(this.root);
+
+      this._mounted = true;
+      if (this.keyboardEnabled) this.enableKeyboard();
+      this._render();
+      return this;
+    }
+
+    unmount(){
+      this.disableKeyboard();
+      if (this.root && this.root.parentNode) this.root.parentNode.removeChild(this.root);
+      this._appCardCache.clear();
+      this._dockLastR.clear();
+      this._dockCopies = [];
+      this._mounted = false;
+      return this;
+    }
+    destroy(){ return this.unmount(); }
+
+    /* ---------- positioning / visibility ---------- */
+    setPosition(pos){
+      this.position = { ...this.position, ...pos };
+      this._applyPosition();
+      return this;
+    }
+    _applyPosition(){
+      if (!this.root) return;
+      ["top","left","right","bottom"].forEach(k => { this.root.style[k] = ""; });
+      Object.entries(this.position).forEach(([k,v]) => { this.root.style[k] = v; });
+    }
+    show(){ if(this.root) this.root.style.display = ""; return this; }
+    hide(){ if(this.root) this.root.style.display = "none"; return this; }
+
+    /* ---------- keyboard ---------- */
+    enableKeyboard(){ document.addEventListener("keydown", this._onKeyDown); this.keyboardEnabled = true; return this; }
+    disableKeyboard(){ document.removeEventListener("keydown", this._onKeyDown); this.keyboardEnabled = false; return this; }
+    _onKeyDown(e){
+      // don't hijack typing when this widget is embedded in a host app
+      const t = e.target;
+      const tag = t && t.tagName ? t.tagName.toLowerCase() : "";
+      if (tag === "input" || tag === "textarea" || (t && t.isContentEditable)) return;
+
+      if (!this.state.isOpen){
+        if (e.key === "ArrowDown" || e.key === "ArrowRight"){ this.next(); e.preventDefault(); }
+        else if (e.key === "ArrowUp" || e.key === "ArrowLeft"){ this.prev(); e.preventDefault(); }
+        else if (e.key === "Enter" || e.key === " "){ this.openSelected(); e.preventDefault(); }
+      } else {
+        if (e.key === "ArrowDown" || e.key === "ArrowRight"){ this.subNext(); e.preventDefault(); }
+        else if (e.key === "ArrowUp" || e.key === "ArrowLeft"){ this.subPrev(); e.preventDefault(); }
+        else if (e.key === "Escape" || e.key === "Backspace"){ this.close(); e.preventDefault(); }
+      }
+    }
+
+    /* ---------- navigation API ---------- */
+    next(){
+      this._cursor++;
+      this.state.index = wrapIndex(this._cursor, this.apps.length);
+      this._render();
+      this._emit("navigate", this.getState());
+      return this;
+    }
+    prev(){
+      this._cursor--;
+      this.state.index = wrapIndex(this._cursor, this.apps.length);
+      this._render();
+      this._emit("navigate", this.getState());
+      return this;
+    }
+    goTo(i){
+      const n = this.apps.length;
+      const target = wrapIndex(i, n);
+      const current = wrapIndex(this._cursor, n);
+      const fwd = wrapIndex(target - current, n);
+      const back = wrapIndex(current - target, n);
+      this._cursor += fwd <= back ? fwd : -back;
+      this.state.index = target;
+      this._render();
+      this._emit("navigate", this.getState());
+      return this;
+    }
+
+    openSelected(){ return this.open(this.apps[this.state.index].id); }
+    open(appId){
+      const idx = this.apps.findIndex(a => a.id === appId);
+      if (idx === -1) return this;
+      const n = this.apps.length;
+      const current = wrapIndex(this._cursor, n);
+      if (idx !== current){
+        const fwd = wrapIndex(idx - current, n);
+        const back = wrapIndex(current - idx, n);
+        this._cursor += fwd <= back ? fwd : -back;
+      }
+      this.state.index = idx;
+      this.state.isOpen = true;
+      this.state.subIndex = 0;
+      this._buildSubcardsFor(this.apps[idx]);
+      this._render();
+      this._emit("open", this.getState());
+      return this;
+    }
+    close(){
+      if (!this.state.isOpen) return this;
+      this.state.isOpen = false;
+      this._render();
+      this._emit("close", this.getState());
+      return this;
+    }
+
+    subNext(){
+      const app = this.apps[this.state.index];
+      const n = app.subItems.length;
+      this.state.subIndex = (this.state.subIndex+1)%n;
+      this._render();
+      this._emit("subnavigate", this.getState());
+      return this;
+    }
+    subPrev(){
+      const app = this.apps[this.state.index];
+      const n = app.subItems.length;
+      this.state.subIndex = (this.state.subIndex-1+n)%n;
+      this._render();
+      this._emit("subnavigate", this.getState());
+      return this;
+    }
+
+    /* ---------- data API ---------- */
+    setApps(apps){
+      this.apps = apps;
+      this.state = { index:0, isOpen:false, subIndex:0 };
+      this._cursor = 0;
+      this._appCardCache.clear();
+      if (this._mounted){
+        this._buildDockIcons();
+        this._render();
+      }
+      return this;
+    }
+    updateApp(appId, partial){
+      const app = this.apps.find(a => a.id === appId);
+      if (!app) return this;
+      Object.assign(app, partial);
+      this._appCardCache.delete(appId);
+      if (this.state.isOpen && this.apps[this.state.index].id === appId){
+        this._buildSubcardsFor(app);
+      }
+      this._render();
+      return this;
+    }
+
+    /* ---------- events ---------- */
+    on(evt, cb){ if (!this._listeners[evt]) this._listeners[evt] = []; this._listeners[evt].push(cb); return this; }
+    off(evt, cb){ if(this._listeners[evt]) this._listeners[evt]=this._listeners[evt].filter(f=>f!==cb); return this; }
+    _emit(evt, data){ (this._listeners[evt]||[]).forEach(cb => cb(data)); }
+
+    getState(){
+      const app = this.apps[this.state.index];
+      const sub = this.state.isOpen ? app.subItems[this.state.subIndex] : null;
+      return {
+        index: this.state.index, appId: app.id, appName: app.name,
+        isOpen: this.state.isOpen,
+        subIndex: this.state.subIndex, subId: sub ? sub.id : null
+      };
+    }
+
+    /* ---------- rendering ---------- */
+    _buildDockIcons(){
+      this._dockCopies.forEach(({ el }) => el.remove());
+      this._dockCopies = [];
+      this._dockLastR.clear();
+
+      this.apps.forEach((app, i) => {
+        for (let c = 0; c < DOCK_COPIES; c++){
+          const el = document.createElement("div");
+          el.className = "stack3d-dock-icon";
+          el.innerHTML = ICONS[app.icon] || ICONS.memory;
+          el.title = app.name;
+          el.style.color = app.accent || "";
+          el.addEventListener("click", () => {
+            if (this.state.isOpen) return;
+            const r = parseInt(el.dataset.slot, 10);
+            if (Number.isNaN(r)) return;
+            if (r === 0) this.openSelected();
+            else {
+              this._cursor += r;
+              this.state.index = wrapIndex(this._cursor, this.apps.length);
+              this._render();
+              this._emit("navigate", this.getState());
+            }
+          });
+          if (this.labelEl) this.dockEl.insertBefore(el, this.labelEl);
+          else this.dockEl.appendChild(el);
+          this._dockCopies.push({ el, appIndex: i });
+        }
+      });
+    }
+
+    _dockSlotsFor(i, n){
+      const rMax = dockRMax(n);
+      const k0 = Math.ceil((DOCK_R_MIN - i + this._cursor) / n);
+      const k1 = Math.floor((rMax - i + this._cursor) / n);
+      const slots = [];
+      for (let k = k0; k <= k1; k++){
+        slots.push({ k, r: i + k * n - this._cursor });
+      }
+      return slots;
+    }
+
+    _placeDockIcon(el, r, isOpen){
+      const isSelected = r === 0;
+      const d = Math.abs(r);
+      el.classList.toggle("selected", isSelected);
+      el.dataset.slot = String(r);
+      const scale = isSelected ? 1.12 : Math.max(0.88, 1 - d * 0.05);
+      el.style.visibility = "";
+      el.style.transform = `translate3d(${r*DOCK_STEP.x}px, ${r*DOCK_STEP.y}px, ${r*DOCK_STEP.z}px) scale(${scale})`;
+      el.style.opacity = dockOpacity(r, isOpen);
+      el.style.zIndex = String(100 - r);
+      el.style.filter = d === 0 ? "blur(0px)" : `blur(${Math.min(d*0.5, 2.5)}px)`;
+      el.style.pointerEvents = isOpen && !isSelected ? "none" : "auto";
+    }
+
+    _hideDockIcon(el){
+      el.classList.remove("selected");
+      el.dataset.slot = "";
+      el.dataset.k = "";
+      el.style.opacity = 0;
+      el.style.visibility = "hidden";
+      el.style.pointerEvents = "none";
+      this._dockLastR.delete(el);
+    }
+
+    _buildSubcardsFor(app){
+      if (this._appCardCache.has(app.id)) return this._appCardCache.get(app.id);
+      const cards = app.subItems.map(item => {
+        const el = document.createElement("div");
+        el.className = "stack3d-subcard";
+        el.style.setProperty("--card-accent", item.accent || app.accent || "#c9b6a0");
+        el.innerHTML = `
+          <div class="sc-header">
+            <div class="sc-badge">${escapeHtml(initials(item.title))}</div>
+            <div class="sc-title">${escapeHtml(item.title)}</div>
+          </div>
+          <div class="sc-body">${renderBody(item)}</div>`;
+        return el;
+      });
+      this._appCardCache.set(app.id, cards);
+      return cards;
+    }
+
+    _render(){
+      const { index, isOpen, subIndex } = this.state;
+      const n = this.apps.length;
+      const app = this.apps[index];
+
+      // dock icons — infinite line: previous apps keep going forward and fade
+      const copiesByApp = new Map();
+      this._dockCopies.forEach(copy => {
+        if (!copiesByApp.has(copy.appIndex)) copiesByApp.set(copy.appIndex, []);
+        copiesByApp.get(copy.appIndex).push(copy.el);
+      });
+
+      for (let i = 0; i < n; i++){
+        const els = copiesByApp.get(i) || [];
+        const slots = this._dockSlotsFor(i, n);
+        const assigned = new Map();
+        const taken = new Set();
+
+        els.forEach(el => {
+          const prevK = el.dataset.k;
+          const slot = slots.find(s => String(s.k) === prevK);
+          if (slot && !taken.has(slot.k)){
+            assigned.set(el, slot);
+            taken.add(slot.k);
+          }
+        });
+
+        const leftoverSlots = slots.filter(s => !taken.has(s.k));
+        const leftoverEls = els.filter(el => !assigned.has(el));
+        leftoverEls.forEach((el, idx) => {
+          assigned.set(el, leftoverSlots[idx] || null);
+        });
+
+        assigned.forEach((slot, el) => {
+          if (!slot){
+            this._hideDockIcon(el);
+            return;
+          }
+          const lastR = this._dockLastR.get(el);
+          const snap = lastR == null || Math.abs(slot.r - lastR) > 1;
+          if (snap) el.style.transition = "none";
+          el.dataset.k = String(slot.k);
+          this._placeDockIcon(el, slot.r, isOpen);
+          this._dockLastR.set(el, slot.r);
+          if (snap){
+            el.offsetHeight;
+            el.style.transition = "";
+          }
+        });
+      }
+
+      this.labelEl.textContent = app.name;
+      this.labelEl.style.opacity = isOpen ? 0 : 0.85;
+
+      // window
+      this.windowEl.classList.toggle("open", isOpen);
+
+      if (isOpen){
+        const cards = this._buildSubcardsFor(app);
+        // ensure only this app's cards are in the frame
+        Array.from(this.frameEl.querySelectorAll(".stack3d-subcard")).forEach(el => {
+          if (!cards.includes(el)) el.remove();
+        });
+        cards.forEach((el, i) => {
+          if (!el.parentNode) this.frameEl.appendChild(el);
+          const r = (i - subIndex + cards.length) % cards.length;
+          el.classList.toggle("is-back", r !== 0);
+          el.style.transform = `translate3d(${r*SUB_STEP.x}px, ${r*SUB_STEP.y}px, ${r*SUB_STEP.z}px)`;
+          el.style.opacity = subOpacity(r);
+          el.style.zIndex = 100 - r;
+          el.style.filter = r === 0 ? "blur(0px)" : `blur(${Math.min(r*0.6, 3)}px)`;
+        });
+      }
+    }
+  }
+
+  // expose as a reusable, embeddable global
+  window.Stack3D = Stack3D;
+  window.Stack3D.DEFAULT_APPS = DEFAULT_APPS;
+
+  /* ============================================================
+     DEMO WIRING
+  ============================================================= */
+  document.addEventListener("DOMContentLoaded", () => {
+    const widget = new Stack3D(document.getElementById("widget-root"), {
+      apps: DEFAULT_APPS,
+      position: { left: "64px", bottom: "150px" }
+    });
+    widget.mount();
+  });
+})();
+</script>
+</body>
+</html>

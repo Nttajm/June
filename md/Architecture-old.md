@@ -1,0 +1,449 @@
+# June — Architecture
+
+June is an ultra-low-latency, full-duplex voice agent: the browser streams microphone audio to a Node.js backend, which orchestrates speech-to-text, LLM reasoning, text-to-speech, and persistent memory. The user talks naturally; June responds in voice with barge-in (interrupt) support and speculative turn completion for faster replies.
+
+This document is the onboarding map for humans and AI agents working in the repo.
+
+---
+
+## Quick start
+
+```bash
+npm install
+cp .env.example .env   # add API keys
+npm start              # http://localhost:3000
+```
+
+Open the page and click the orb (or press `m`) to start a voice session. Memory persists in the browser via `localStorage`.
+
+| Key | Purpose |
+| --- | --- |
+| `DEEPGRAM_API_KEY` | STT (Deepgram Flux) |
+| `OPENAI_API_KEY` | Main LLM, memory AI, thought agent |
+| `CARTESIA_API_KEY` or `ELEVENLABS_API_KEY` | Server-side TTS (optional; browser TTS fallback exists) |
+
+---
+
+## Repository layout
+
+```
+June/
+├── server.js              # HTTP server, REST APIs, WebSocket /voice
+├── june.html              # Single-page UI shell
+├── aichr_2.md             # June's personality / system prompt (loaded by lib/states.js)
+├── .env.example           # Environment variable reference
+│
+├── lib/                   # Server-side modules (ES modules, Node ≥18.17)
+│   ├── states.js          # Config, State enum, FluxEvent enum, SYSTEM_PROMPT
+│   ├── session.js         # VoiceSession — core orchestrator & state machine
+│   ├── sttFlux.js         # Deepgram Flux WebSocket client
+│   ├── llm.js             # OpenAI streaming chat + greeting generation
+│   ├── tts.js             # Cartesia / ElevenLabs TTS + stall markers
+│   ├── memory-store.js    # Category schema v3, scan/get, upserts
+│   ├── memory-tools.js    # Two-step OpenAI tools for main LLM
+│   ├── memory.js          # Prompt builders + conversation heuristics
+│   ├── memory-ai.js       # Async Memory Update / consolidation agents
+│   ├── thought-agent.js   # Background associative “thoughts” for the main LLM
+│   └── functions.js       # Session control: pause, resume, sleep
+│
+├── js/                    # Browser scripts (IIFEs, no bundler)
+│   ├── voice-client.js    # WebSocket, mic capture, TTS playback, UI events
+│   ├── memory.js          # localStorage persistence (window.JuneMemory)
+│   ├── chat-history.js    # Saved chats sidebar store (window.JuneChatHistory)
+│   ├── index.js           # (empty placeholder)
+│   └── ui.js              # (empty placeholder)
+│
+├── css/index.css          # App styles
+└── md/
+    ├── PIPELINE.md        # Voice pipeline deep dive
+    └── STT-PIPELINE.md    # STT / Flux / mic capture details
+```
+
+---
+
+## High-level architecture
+
+```mermaid
+flowchart TB
+  subgraph Browser
+    HTML[june.html]
+    VC[voice-client.js]
+    MEM[js/memory.js]
+    HTML --> VC
+    VC --> MEM
+  end
+
+  subgraph Server["server.js"]
+    HTTP[Static + REST APIs]
+    WS["WebSocket /voice"]
+    VS[VoiceSession]
+    HTTP --- WS
+    WS --> VS
+  end
+
+  subgraph External
+    DG[Deepgram Flux STT]
+    OAI[OpenAI API]
+    TTS[Cartesia / ElevenLabs]
+  end
+
+  VC <-->|"binary PCM + JSON"| WS
+  VS <--> DG
+  VS <--> OAI
+  VS <--> TTS
+  MEM <-->|"memory_update"| VC
+```
+
+**Data ownership**
+
+- **Conversation history** — held in `VoiceSession.history` on the server for the active WebSocket session; mirrored client-side in `voice-client.js` (`clientHistory`) for display only.
+- **Long-term memory** — authoritative store is browser `localStorage` (`june_memory`). Server analyzes and mutates memory in RAM, then pushes updates via `memory_update` messages; client persists with `JuneMemory.applyFromServer()`.
+
+---
+
+## Voice pipeline (one turn)
+
+```
+Mic (float32) → resample to 16k Int16 → WebSocket binary → FluxStream
+                                                              ↓ TurnInfo events
+                                                         VoiceSession
+                                                              ↓ EndOfTurn / EagerEndOfTurn
+                                                    analyzeUserIntent (memory-ai)
+                                                              ↓
+                                                    streamReply (llm) — speculative or confirmed
+                                                              ↓ token deltas
+                                                    TTS speak (Cartesia/ElevenLabs) or text-only
+                                                              ↓ PCM f32 @ 24k
+WebSocket binary [4-byte turnId | PCM] → browser gapless playback
+```
+
+### Speculative execution (latency optimization)
+
+Deepgram Flux emits `EagerEndOfTurn` before a final `EndOfTurn`. June starts the LLM early on eager EOT but **buffers tokens without TTS** until the final transcript confirms the same text. If the user resumes speaking (`TurnResumed`), the speculative draft is aborted.
+
+### Barge-in
+
+On `StartOfTurn` while June is speaking: abort LLM (`AbortController`), cancel TTS context, send `interrupt` to client, flush scheduled audio buffers. Client tags each PCM chunk with `turnId` and ignores stragglers after interrupt.
+
+### Stall markers / gap pacing
+
+The LLM may emit `[gap N]` markers (`N` = seconds, clamped **0.3–2.0**) for natural spoken pauses. `mergeCleanDelta` in `lib/memory.js` strips them from display/history and returns ordered speech segments. Silence is queued as `pendingSilenceSec` and prepended to the next TTS PCM chunk (or flushed at turn end) via `makeSilencePcm()` in `lib/tts.js`. Chat UI never shows markers by default; with stall visibility on (`Cmd/Ctrl+Shift+G` / agent inspector), red `gap 0.6` labels appear. Browser TTS fallback speaks segments with `setTimeout` delays between parts.
+
+---
+
+## State machine
+
+Defined in `lib/states.js` as `State`:
+
+| State | Meaning |
+| --- | --- |
+| `IDLE` | No active STT connection |
+| `LISTENING` | Mic open, waiting for user speech |
+| `THINKING` | LLM streaming (may be speculative) |
+| `SPEAKING` | TTS audio playing or assistant text streaming |
+| `PAUSED` | User asked to pause; mic still streams but turns are ignored until resume |
+
+Transitions are driven by Flux turn events, generation lifecycle, and session functions (`pause` / `resume` / `sleep`).
+
+---
+
+## Module reference
+
+### `server.js`
+
+- Serves static files (`june.html`, `js/`, `css/`).
+- **REST endpoints** (see [HTTP API](#http-api)).
+- **WebSocket** at `/voice`: creates one `VoiceSession` per connection.
+  - Binary messages → `session.handleAudio()`
+  - JSON messages → `init`, `text`, `resume`, `set_tts_provider`
+
+### `lib/session.js` — `VoiceSession`
+
+The central orchestrator. Owns:
+
+- STT (`FluxStream`), TTS instance, conversation `history`, `memory`, `context`
+- Generation object (`gen`) per turn: `AbortController`, speculative flag, TTS controller, buffers
+- Thought agent scheduling (debounced on partial transcripts)
+- Memory sync after each assistant turn (`#syncMemoryToClient`)
+- Session consolidation on close or sleep (`#consolidateAndSend`)
+
+Key private methods: `#processUserTurn`, `#beginGeneration`, `#consume` (LLM stream), `#emitDelta`, `#finalize`, `#abortGeneration`.
+
+### `lib/sttFlux.js` — `FluxStream`
+
+WebSocket client to `wss://api.deepgram.com/v2/listen` with model `flux-general-multi` (configurable via `STT_MODEL`), linear16 @ 16kHz. Emits `turn` events with `FluxEvent` types. Pre-buffers audio until the socket is open. On multilingual, detect-then-lock biases `language_hint` after consecutive same-language `EndOfTurn`s.
+
+### `lib/llm.js`
+
+- `streamReply()` — async generator over OpenAI Chat Completions (`stream: true`).
+- `generateGreeting()` — one-shot greeting when the page loads (also exposed as `/api/greeting`).
+- Builds system prompt from: `aichr_2.md` + memory instructions + conversation rhythm + thought hints.
+
+Models: `OPENAI_MODEL` (default `gpt-4o-mini`), temperature `MAIN_TEMPERATURE`.
+
+### `lib/tts.js`
+
+- `createTTS(provider)` → `CartesiaTTS` or `ElevenLabsTTS` (WebSocket streaming).
+- `provider === "browser"` → server returns `null` TTS; client uses `speechSynthesis` on `speakFallback`.
+- Each generation uses context id `gen-{turnId}`.
+
+### `lib/memory-store.js` — Memory v3 (category schema)
+
+Category-based long-term memory (`version: 3`):
+
+| Category | Role |
+| --- | --- |
+| `general_info` | Foundational facts — inlined into the system prompt |
+| `interests` | Broad hobbies / skills — explore via tools |
+| `topic_deep_dives` | Specific fixations — explore via tools |
+| *(dynamic)* | Memory Update Agent may create new snake_case categories |
+
+Each category holds `sub_memories[]` of `{ id, title, timestamp, content }`.
+
+Exports: `normalizeMemory`, `scanCategory`, `getSubMemory`, `applyCategoryUpdates`, `getCategoryDirectory`, `getGeneralFacts`.
+
+### `lib/memory-tools.js` — two-step Memory Helper
+
+1. `scan_memory_category` — titles only
+2. `get_memory_detail` — one sub-memory content
+
+`lib/llm.js` `streamReply` runs a bounded tool loop (max 2 rounds). Tool chatter never reaches TTS.
+
+### `lib/memory.js` — prompt builders + conversation heuristics
+
+Builds system-prompt blocks from general_info + category directory. Keeps dry-utterance / rhythm helpers. Old token-budget retrieval removed (tools replace it).
+
+### `lib/memory-ai.js` — Memory Update Agent (async)
+
+| Function | When | Output |
+| --- | --- | --- |
+| `analyzeUserIntent()` | When paused | `pause` / `resume` / null |
+| `analyzeTurnMemory()` | After each assistant reply (non-blocking) | generalInfo, categorized, corrections, chatTitle |
+| `consolidateSessionMemory()` | Session end / sleep | title, summary, promote upserts |
+| `deduplicateMemories()` | Periodic (API) | merge same-title sub_memories |
+
+Saved chats use `json-templete/history.json` shape. Server sends `chat_saved`; client stores via `js/chat-history.js`.
+
+### `lib/thought-agent.js`
+
+Background associative mind (`THOUGHT_AI_MODEL`, default `gpt-4o-mini`). Runs debounced on partial transcripts (`THOUGHT_DEBOUNCE_MS`, rate-limited `THOUGHT_RATE_LIMIT_MS`). Produces `asyncThoughtCache` (topic, casualDrops, memoryBridge, juneSelfDrop) merged into the main LLM prompt when confidence ≥ 0.35.
+
+### `lib/snapshot-agent.js`
+
+Background topic context generator (`SNAPSHOT_AI_MODEL`, default `gpt-4o-mini`). Generates ~100-150 word conversational snapshots about topics being discussed (shows, sports, people, memories, etc.).
+
+**Key design: async & non-blocking**
+- Main AI **never waits** for snapshot — uses whatever's cached
+- Smart topic detection: only refreshes when topic changes
+- Rate-limited (`SNAPSHOT_RATE_LIMIT_MS`, default 5s) and debounced (`SNAPSHOT_DEBOUNCE_MS`, default 800ms)
+- Cache expires after `SNAPSHOT_MAX_AGE_MS` (default 2 min)
+
+Output includes:
+- `topic` / `topicType` — what's being discussed
+- `snapshot` — conversational context (~150 words)
+- `conversationAngles` — natural follow-up hooks
+
+### `lib/functions.js`
+
+- `Fn.PAUSE`, `Fn.RESUME`, `Fn.SLEEP`
+- `detectSleepCommand()` — only hardcoded phrase: “go to sleep” / “go sleep”
+
+### `js/voice-client.js`
+
+Browser bridge:
+
+- AudioWorklet mic capture → resample to 16k → binary WebSocket send
+- JSON protocol handler (state, transcripts, assistant deltas, memory, functions)
+- Gapless PCM playback @ 24k with per-turn interrupt
+- Orb click / `m` key: start / stop / resume
+- Text input bar → `{ type: "text" }`
+- Settings: TTS provider select → `set_tts_provider`
+- `loadGreeting()` on page load via `/api/greeting`
+
+### `js/memory.js` — `window.JuneMemory`
+
+Client-side mirror of memory schema. `localStorage` key: `june_memory`. Methods: `load`, `save`, `applyFromServer`, `startSession`, `getStorageStats`, etc.
+
+---
+
+## WebSocket protocol (`/voice`)
+
+### Client → server (JSON)
+
+| `type` | Payload | Action |
+| --- | --- | --- |
+| `init` | `memory`, `context`, `history?`, `ttsProvider?` | Start session, load memory |
+| `text` | `text` | Typed user message (bypasses STT) |
+| `resume` | — | Unpause after client-side pause |
+| `set_tts_provider` | `provider` | Switch TTS (`elevenlabs`, `cartesia`, `browser`) |
+
+### Client → server (binary)
+
+Raw Int16 PCM chunks @ 16kHz (mic audio).
+
+### Server → client (JSON)
+
+| `type` | Purpose |
+| --- | --- |
+| `ready` | Capabilities, available TTS providers |
+| `state` | `IDLE` / `LISTENING` / `THINKING` / `SPEAKING` / `PAUSED` |
+| `transcript` | User speech partial or final |
+| `assistant_delta` | Streaming assistant text (`text`, `textWithStalls`, `turnId`) |
+| `assistant_done` | Turn complete (`speakFallback` if browser TTS needed) |
+| `memory_update` | Full category memory object after turn analysis |
+| `chat_saved` | Saved-chat record for sidebar / localStorage |
+| `function` | `pause`, `resume`, or `sleep` |
+| `interrupt` | Barge-in; includes `turnId` to drop |
+| `tts_provider` | Confirms active provider |
+| `error` | `{ source, message }` |
+
+### Server → client (binary)
+
+```
+[uint32 LE turnId][float32 PCM samples @ 24kHz]
+```
+
+---
+
+## HTTP API
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/greeting` | Generate opening greeting from memory + timezone context |
+| `POST` | `/api/consolidate` | End-of-session category upserts + session summary |
+| `POST` | `/api/deduplicate` | Merge duplicate sub_memories within categories |
+| `GET` | `/api/memory/stats` | Schema v3, tool retrieval mode, limits |
+| `GET` | `/` | Serves `june.html` |
+
+---
+
+## AI agent split
+
+June uses **five distinct LLM roles** (same or different models via env):
+
+```mermaid
+flowchart LR
+  subgraph Realtime["Per turn (latency-sensitive)"]
+    Main[Main LLM<br/>lib/llm.js]
+    Intent[Intent AI<br/>memory-ai analyzeUserIntent]
+  end
+
+  subgraph Async["After / between turns (non-blocking)"]
+    TurnMem[Turn Memory AI<br/>memory-ai analyzeTurnMemory]
+    Thought[Thought Agent<br/>thought-agent.js]
+    Snapshot[Snapshot Agent<br/>snapshot-agent.js]
+  end
+
+  subgraph Session["Session lifecycle"]
+    Consolidate[Consolidation AI<br/>memory-ai consolidateSessionMemory]
+    Dedupe[Dedup AI<br/>memory-ai deduplicateMemories]
+  end
+
+  Main -->|"personality + memory + thoughts + snapshot"| User
+  Intent -->|"pause/resume"| Session
+  TurnMem -->|"updates"| Memory
+  Thought -->|"hints"| Main
+  Snapshot -->|"topic context"| Main
+```
+
+| Agent | File | Prompt source | Runs |
+| --- | --- | --- | --- |
+| Main conversational | `lib/llm.js` | `aichr_2.md` + memory builders | Every confirmed turn (speculative OK) |
+| Intent detection | `lib/memory-ai.js` | `INTENT_AI_PROMPT` | Start of each turn |
+| Turn memory | `lib/memory-ai.js` | `MEMORY_AI_PROMPT` | After each assistant reply |
+| Thought | `lib/thought-agent.js` | `THOUGHT_AGENT_PROMPT` | Debounced on partial STT |
+| **Snapshot** | `lib/snapshot-agent.js` | `SNAPSHOT_PROMPT` | Async on topic change (rate-limited) |
+| Consolidation | `lib/memory-ai.js` | `CONSOLIDATION_PROMPT` | WebSocket close, sleep, `/api/consolidate` |
+
+---
+
+## Session control
+
+| Trigger | Detection | Effect |
+| --- | --- | --- |
+| Pause | LLM intent (`hang on`, `shush`, etc.) | Stop engaging; mic may still run; orb shows paused |
+| Resume | LLM intent or orb click / `m` | Resume listening |
+| Sleep | Hardcoded `go to sleep` | Consolidate memory, close session, stop voice |
+| Barge-in | Flux `StartOfTurn` | Abort current generation |
+
+---
+
+## Configuration (`lib/states.js` / `.env`)
+
+| Variable | Default | Role |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP server |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Main conversational LLM |
+| `MEMORY_AI_MODEL` | `gpt-4o-mini` | Memory analysis & consolidation |
+| `THOUGHT_AI_MODEL` | `gpt-4o-mini` | Background thoughts |
+| `MAIN_TEMPERATURE` | `0.86` | Main LLM temperature |
+| `MEMORY_TOKEN_BUDGET` | `600` | Max tokens of retrieved memory in prompt |
+| `TTS_PROVIDER` | `cartesia` | Default server TTS |
+| `CARTESIA_VOICE_ID` | `f786b574-daa5-4673-aa0c-cbe3e8534c02` | Cartesia TTS voice |
+| `CARTESIA_MODEL` | `sonic-3` | Cartesia TTS model |
+| `ELEVENLABS_VOICE_ID` | (none) | ElevenLabs TTS voice |
+| `ELEVENLABS_MODEL` | `eleven_flash_v2_5` | ElevenLabs TTS model |
+| `STT_SAMPLE_RATE` | `16000` | Mic / Flux rate |
+| `TTS_SAMPLE_RATE` | `24000` | Playback rate |
+| `EAGER_EOT_THRESHOLD` | `0.5` | Flux eager end-of-turn sensitivity |
+| `EOT_THRESHOLD` | `0.7` | Flux final end-of-turn |
+| `EOT_TIMEOUT_MS` | `3000` | Flux silence timeout |
+| `THOUGHT_DEBOUNCE_MS` | `500` | Delay before thought agent runs |
+| `THOUGHT_RATE_LIMIT_MS` | `5000` | Min interval between thought runs |
+| `SNAPSHOT_AI_MODEL` | `gpt-4o-mini` | Snapshot context model |
+| `SNAPSHOT_DEBOUNCE_MS` | `800` | Delay before snapshot agent runs |
+| `SNAPSHOT_RATE_LIMIT_MS` | `5000` | Min interval between snapshot runs |
+| `SNAPSHOT_MAX_AGE_MS` | `120000` | How long snapshot stays valid |
+
+---
+
+## Graceful degradation
+
+| Missing key | Behavior |
+| --- | --- |
+| No Deepgram | STT fails; errors sent to client |
+| No OpenAI | Echo fallback reply; no memory AI / thoughts |
+| No Cartesia/ElevenLabs | Text-only responses; `speakFallback` uses browser `speechSynthesis` |
+
+---
+
+## Where to change what
+
+| Goal | Start here |
+| --- | --- |
+| June's personality / speech style | `aichr_3.md` (loaded by `lib/states.js`) |
+| Per-turn spoken clause shape | `lib/memory.js` (`pickTurnSyntax`, `buildConversationRhythm`) |
+| Turn latency / barge-in / speculative logic | `lib/session.js`, `lib/sttFlux.js` |
+| What June remembers per turn | `lib/memory-ai.js`, `lib/memory-store.js` (`applyCategoryUpdates`) |
+| Two-step memory retrieval | `lib/memory-tools.js`, `lib/llm.js` |
+| Chat history sidebar | `june.html`, `js/chat-history.js`, `js/voice-client.js` |
+| Client memory persistence | `js/memory.js` |
+| New REST endpoint | `server.js` |
+| Env / ports / models | `lib/states.js`, `.env.example` |
+
+---
+
+## Related documentation
+
+- [`md/PIPELINE.md`](md/PIPELINE.md) — voice pipeline, state machine, cancellation guarantees
+- [`md/STT-PIPELINE.md`](md/STT-PIPELINE.md) — Deepgram Flux, mic capture, resampling, tuning
+- [`aichr_2.md`](aichr_2.md) — full character prompt (loaded at server startup)
+- [`.env.example`](.env.example) — all environment variables
+
+---
+
+## Dependencies
+
+```json
+{
+  "dotenv": "env loading",
+  "openai": "LLM + memory AI + thought agent",
+  "ws": "WebSocket server + external STT/TTS clients"
+}
+```
+
+No frontend build step. No database. Single-process Node server.
+
+
+
+run after each completed prompt:  npx kill-port 3000 && npm start

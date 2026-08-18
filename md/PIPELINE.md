@@ -7,7 +7,7 @@ Full-duplex, interruptible voice loop. Browser (`june.html`) streams mic audio t
 
 | Stage | Service | Module |
 | --- | --- | --- |
-| STT | Deepgram Flux (`/v2/listen`, `flux-general-en`) | `lib/sttFlux.js` |
+| STT | Deepgram Flux (`/v2/listen`, `flux-general-multi`) | `lib/sttFlux.js` |
 | LLM | OpenAI Responses API (streaming + abort) | `lib/llm.js` |
 | TTS | Cartesia Sonic (WebSocket contexts) | `lib/tts.js` |
 | Orchestrator | turn state machine | `lib/session.js` |

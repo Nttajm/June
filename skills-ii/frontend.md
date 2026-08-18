@@ -12,9 +12,8 @@ The user provides frontend requirements: a component, page, application, or inte
 
 Before coding, understand the context and commit to a BOLD aesthetic direction:
 - **Purpose**: What problem does this interface solve? Who uses it?
-
+- **Tone**: Pick an extreme: brutally minimal, organic/natural,/refined, / editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
 - **Constraints**: Technical requirements (framework, performance, accessibility).
-- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
 
 **CRITICAL**: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work - the key is intentionality, not intensity.
 
@@ -61,6 +60,5 @@ avoid using emojis for headers or describing items, only when neccarcy like a ph
 
 no floating animations.
 
-kill -2 $(lsof -ti:3000) && node server.js 
 
-kill -9 $(lsof -t -i:3000) && npm run dev
+avoid to much variations in fonts, try to be consistant, aswell as consitant with if already fonst of the website.

@@ -1,10 +1,10 @@
 /**
  * Bottom DevTools-style Agent Inspector (Ctrl/Cmd+Shift+G).
- * Consumes agent_trace events and shows live agent/tool activity.
+ * Consumes agent_trace events and shows live agent/tool activity + session cost.
  */
 (function () {
   const MAX_EVENTS = 200;
-  const AGENTS = ["main", "thinker", "snapshot", "memory", "followup"];
+  const AGENTS = ["main", "thinker", "snapshot", "memory", "followup", "brainstorm", "artifacts"];
 
   const events = [];
   let open = false;
@@ -12,6 +12,8 @@
   let stickToBottom = true;
   /** @type {Record<string, boolean>} */
   const live = Object.fromEntries(AGENTS.map((a) => [a, false]));
+  /** @type {object|null} */
+  let usageSnapshot = null;
 
   const panel = document.getElementById("agentInspector");
   const timeline = document.getElementById("agentInspectorTimeline");
@@ -21,6 +23,11 @@
   const clearBtn = document.getElementById("agentInspectorClear");
   const copyBtn = document.getElementById("agentInspectorCopy");
   const closeBtn = document.getElementById("agentInspectorClose");
+  const costUsdEl = document.getElementById("agentInspectorCostUsd");
+  const costTokensEl = document.getElementById("agentInspectorCostTokens");
+  const costCacheEl = document.getElementById("agentInspectorCostCache");
+  const costBreakdownEl = document.getElementById("agentInspectorCostBreakdown");
+  const costSourceEl = document.getElementById("agentInspectorCostSource");
 
   if (!panel || !timeline) {
     console.warn("[June] Agent Inspector markup missing");
@@ -50,6 +57,132 @@
     }
   }
 
+  function pushUsage(msg) {
+    if (!msg || msg.type !== "usage_update") return;
+    usageSnapshot = msg;
+    if (open) renderCost();
+  }
+
+  function formatUsd(n) {
+    const v = Number(n) || 0;
+    if (v >= 1) return `$${v.toFixed(4)}`;
+    if (v >= 0.01) return `$${v.toFixed(5)}`;
+    return `$${v.toFixed(6)}`;
+  }
+
+  function formatTok(n) {
+    const v = Math.round(Number(n) || 0);
+    return v.toLocaleString();
+  }
+
+  function formatElapsed(ms) {
+    const sec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  }
+
+  function renderCost() {
+    if (!costUsdEl || !costTokensEl) return;
+    const totals = usageSnapshot?.totals || {
+      usd: 0,
+      totalTokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      uncachedTokens: 0,
+      calls: 0,
+    };
+    costUsdEl.textContent = formatUsd(totals.usd);
+    const elapsed = usageSnapshot?.elapsedMs != null
+      ? ` · ${formatElapsed(usageSnapshot.elapsedMs)}`
+      : "";
+    const cached = Number(totals.cachedTokens) || 0;
+    const uncached = totals.uncachedTokens != null
+      ? Number(totals.uncachedTokens)
+      : Math.max(0, (Number(totals.inputTokens) || 0) - cached);
+    costTokensEl.textContent =
+      `${formatTok(totals.totalTokens)} tok` +
+      ` · in ${formatTok(totals.inputTokens)} / out ${formatTok(totals.outputTokens)}` +
+      ` · ${totals.calls || 0} calls` +
+      elapsed;
+
+    if (costCacheEl) {
+      const hitPct = (Number(totals.inputTokens) || 0) > 0
+        ? Math.round((cached / totals.inputTokens) * 100)
+        : 0;
+      const last = usageSnapshot?.lastCall;
+      const lastUncached = last?.uncachedTokens != null
+        ? formatTok(last.uncachedTokens)
+        : null;
+      const lastCached = last?.cachedTokens != null ? formatTok(last.cachedTokens) : null;
+      const ttft = usageSnapshot?.ttft || {};
+      const ttftBits = [];
+      if (ttft.lastMs != null) ttftBits.push(`last ${Math.round(ttft.lastMs)}ms`);
+      if (ttft.avgMs != null) ttftBits.push(`avg ${Math.round(ttft.avgMs)}ms`);
+      const lastLine = lastUncached != null
+        ? ` · last turn ${lastUncached} uncached` + (lastCached != null ? ` / ${lastCached} cached` : "")
+        : "";
+      costCacheEl.textContent =
+        `cache ${formatTok(cached)} / ${formatTok(uncached)} uncached (${hitPct}%)` +
+        lastLine +
+        (ttftBits.length ? ` · TTFT ${ttftBits.join(" · ")}` : " · TTFT —");
+    }
+
+    if (costBreakdownEl) {
+      costBreakdownEl.innerHTML = "";
+      const byAgent = usageSnapshot?.byAgent || {};
+      const agents = Object.keys(byAgent).sort((a, b) => (byAgent[b].usd || 0) - (byAgent[a].usd || 0));
+      for (const agent of agents) {
+        const b = byAgent[agent];
+        const chip = document.createElement("span");
+        chip.className = "ai-cost-chip";
+        chip.title = `${agent} this session: ${formatTok(b.inputTokens)} in (${formatTok(b.cachedTokens || 0)} cached / ${formatTok(b.uncachedTokens != null ? b.uncachedTokens : Math.max(0, (b.inputTokens || 0) - (b.cachedTokens || 0)))} uncached) / ${formatTok(b.outputTokens)} out · ${b.calls || 0} calls`;
+        chip.innerHTML =
+          `${escapeHtml(agent)} <strong>${formatUsd(b.usd)}</strong>` +
+          ` · ${formatTok(b.totalTokens)}`;
+        costBreakdownEl.appendChild(chip);
+      }
+      const byModel = usageSnapshot?.byModel || {};
+      const models = Object.keys(byModel);
+      for (const model of models) {
+        const b = byModel[model];
+        const chip = document.createElement("span");
+        chip.className = "ai-cost-chip";
+        const rates = b.rates
+          ? `$${b.rates.input}/$${b.rates.output} per 1M`
+          : "rates unknown";
+        chip.title = `${model} this session · ${rates}`;
+        chip.innerHTML =
+          `<strong>${escapeHtml(model)}</strong> ${formatUsd(b.usd)}` +
+          (b.ratesKnown === false ? " ≈" : "");
+        costBreakdownEl.appendChild(chip);
+      }
+    }
+
+    if (costSourceEl) {
+      const configured = usageSnapshot?.configuredModels;
+      let configLine = "";
+      if (configured) {
+        const bits = ["main", "memory", "thinker", "snapshot", "followup"]
+          .filter((role) => configured[role]?.model)
+          .map((role) => {
+            const c = configured[role];
+            const r = c.rates || {};
+            return `${role}=${c.modelKey || c.model} ($${r.input}/$${r.output})`;
+          });
+        if (bits.length) configLine = ` · active: ${bits.join(" · ")}`;
+      }
+      const src = usageSnapshot?.pricingSource
+        || "LLM list prices: Fireworks Nemotron Ultra $0.60/$2.40 · gpt-oss-20b $0.07/$0.30 · OpenAI gpt-4.1 $2/$8 per 1M";
+      const unknown = usageSnapshot?.unknownModels?.length
+        ? ` · unknown model(s) priced as gpt-4o-mini: ${usageSnapshot.unknownModels.join(", ")}`
+        : "";
+      costSourceEl.textContent = `Session cumulative · ${src}${configLine}${unknown}`;
+      costSourceEl.title = costSourceEl.textContent;
+    }
+  }
+
   function setOpen(next) {
     open = Boolean(next);
     document.body.classList.toggle("agent-inspector-open", open);
@@ -57,6 +190,7 @@
     sendDebug(open);
     if (open) {
       renderAll();
+      renderCost();
       if (stickToBottom) scrollToBottom();
     }
   }
@@ -69,7 +203,12 @@
     const agent = ev.agent;
     if (!AGENTS.includes(agent)) return;
     if (ev.phase === "started" || ev.phase === "tool") live[agent] = true;
-    if (ev.phase === "result" || ev.phase === "aborted" || ev.phase === "skipped") {
+    if (
+      ev.phase === "result"
+      || ev.phase === "aborted"
+      || ev.phase === "skipped"
+      || ev.phase === "injected"
+    ) {
       live[agent] = false;
     }
   }
@@ -110,6 +249,12 @@
         return `${n} writes · ${d.reasoning || ""}`;
       }
       if (ev.agent === "followup") return compact(d.text) || "done";
+      if (ev.agent === "brainstorm") {
+        return ev.name === "format"
+          ? compact(d.title || d.kind) || "draft"
+          : compact(d.action) || "classified";
+      }
+      if (ev.agent === "artifacts") return compact(d.title || d.kind) || "saved";
       if (ev.agent === "main") return `${d.chars ?? "?"} chars`;
     }
     if (ev.phase === "injected") {
@@ -213,6 +358,7 @@
     AGENTS.forEach((a) => { live[a] = false; });
     timeline.innerHTML = "";
     updatePills();
+    // Cost is session-scoped on the server — keep the last snapshot visible.
   }
 
   /** Full dump shaped for pasting into chat / debugging. */
@@ -242,6 +388,7 @@
       agents: AGENTS.slice(),
       byAgent,
       events: flat,
+      usage: usageSnapshot,
     };
   }
 
@@ -313,8 +460,11 @@
     }
   }
 
+  renderCost();
+
   window.JuneAgentInspector = {
     push,
+    pushUsage,
     toggle,
     setOpen,
     isOpen,
